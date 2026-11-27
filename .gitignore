@@ -5,3 +5,13 @@ local.properties
 *.keystore
 qa/*.png
 qa/*.xml
+
+# Local screenshots, tool downloads and previous binary deliveries stay outside source history.
+.impeccable/
+delivery/*.apk
+delivery/*.zip
+delivery/*.png
+qa/*.log
+qa/*threads.txt
+qa/*.json
+qa/apk-signature.txt
