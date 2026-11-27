@@ -1,8 +1,14 @@
-﻿# Ed-Cam
+# Ed-Cam
 
 Ed-Cam is an offline Android camera and photo editor for Android 10 and later. It offers live color presets, a private on-device album, and animated controls from the Sakuga VFX gallery.
 
 **Latest build:** [Download Ed-Cam 1.2.2](delivery/Ed-Cam-1.2.2.apk)
+
+## Screenshot
+
+<img src="docs/images/camera-1.2.2.png" alt="Ed-Cam camera screen with a live color preview, compact mode tabs, and a circular shutter button" width="300">
+
+*Ed-Cam 1.2.2 on an Android emulator with the Cyanotype preset at 50% intensity.*
 
 ## Download
 
