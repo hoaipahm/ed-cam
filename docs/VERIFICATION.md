@@ -1,3 +1,5 @@
+Bản mới: xem [kiểm chứng 1.2.0](VERIFICATION-1.2.0.md). Phần dưới lưu bằng chứng lịch sử 1.1.0.
+
 # Kiểm chứng Ed-Cam 1.1.0
 
 ## Đã xác minh
