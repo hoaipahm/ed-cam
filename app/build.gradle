@@ -7,8 +7,8 @@ android {
         applicationId 'com.edcam'
         minSdk 29
         targetSdk 35
-        versionCode 5
-        versionName '1.2.0'
+        versionCode 6
+        versionName '1.2.1'
         testInstrumentationRunner project.hasProperty('performance') ? 'com.edcam.PerformanceInstrumentation' : 'com.edcam.PixelInstrumentation'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
