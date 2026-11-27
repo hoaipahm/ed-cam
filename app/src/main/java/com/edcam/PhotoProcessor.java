@@ -2,7 +2,6 @@ package com.edcam;
 
 import android.graphics.*;
 import java.io.IOException;
-import java.util.Random;
 
 public final class PhotoProcessor {
   public static final int MAX_EDGE = 2560;
@@ -55,12 +54,17 @@ public final class PhotoProcessor {
     p.setColorFilter(null);
     float grain = style.grain * strength;
     if (grain > .1f) {
-      int noiseW = Math.max(1, cropW / 3), noiseH = Math.max(1, cropH / 3);
+      int noiseW = Math.max(1, Math.min(512, cropW / 3)),
+          noiseH = Math.max(1, Math.min(512, cropH / 3));
       int[] noise = new int[noiseW * noiseH];
-      Random random = new Random(104729);
+      int seed = 104729;
+      int range = Math.max(1, Math.round(grain * 2));
       for (int i = 0; i < noise.length; i++) {
-        int n = random.nextBoolean() ? 255 : 0;
-        int alpha = random.nextInt(Math.max(1, (int) grain * 2));
+        seed ^= seed << 13;
+        seed ^= seed >>> 17;
+        seed ^= seed << 5;
+        int n = (seed & 1) == 0 ? 255 : 0;
+        int alpha = (seed >>> 1) % range;
         noise[i] = Color.argb(alpha, n, n, n);
       }
       Bitmap texture = Bitmap.createBitmap(noise, noiseW, noiseH, Bitmap.Config.ARGB_8888);
