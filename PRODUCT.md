@@ -13,4 +13,4 @@ No accounts, social feed, friend sharing, analytics or advertising. Images are p
 ## Product Principles
 Camera first. Keep originals safe. Explain permissions. Never invent photo or location data. Persist user choices.
 ## Open Decisions
-No physical Android device has been supplied. Performance, camera quality and GPS accuracy require device verification. Five themes and 60 color presets are implementation choices, not a claim of user-tested quality.
+No physical Android device has been supplied. Performance, camera quality and GPS accuracy require device verification. Five themes and 180 color presets are implementation choices, not a claim of user-tested quality.
