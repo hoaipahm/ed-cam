@@ -1,0 +1,61 @@
+{
+  "retrieved": "2026-11-27",
+  "license": "MIT; app/src/main/assets/Sakuga-LICENSE.txt",
+  "files": [
+    {
+      "component": "button",
+      "source": "https://sakuga-vfx.vercel.app/button/button.js",
+      "sha256": "2d6f452b4d9c9489a4da9b6a1f0fb2ef52d88b5a28331eb3b1c5076742e0ddb8"
+    },
+    {
+      "component": "toggle",
+      "source": "https://sakuga-vfx.vercel.app/toggle/toggle.js",
+      "sha256": "0f6115ea1705fda94e8c85f92ee081bf64f71ce6148a8d2e472f28b53f411516"
+    },
+    {
+      "component": "slider",
+      "source": "https://sakuga-vfx.vercel.app/slider/slider.js",
+      "sha256": "7924dec6ed71a86c8e8b611606bb4488dc4bd13f0353daa02fa755142420dbaf"
+    },
+    {
+      "component": "checkbox",
+      "source": "https://sakuga-vfx.vercel.app/checkbox/checkbox.js",
+      "sha256": "f8e89fd1915386a309c8e94425368a7a522529400505bdbbe227138f68704973"
+    },
+    {
+      "component": "radio",
+      "source": "https://sakuga-vfx.vercel.app/radio/radio.js",
+      "sha256": "5f40e75d1439c021e322d9d4286f97037b6309a8965841d4c65d4fe6409b59f7"
+    },
+    {
+      "component": "input",
+      "source": "https://sakuga-vfx.vercel.app/input/input.js",
+      "sha256": "f925605c387c16dc6dad7b946789b0755d40b37ffe2f27860bd8211cd841e8bf"
+    },
+    {
+      "component": "tabs",
+      "source": "https://sakuga-vfx.vercel.app/tabs/tabs.js",
+      "sha256": "0467ac7bb687d8a6f8834b6e5ea7bd36133c2e126fb7231c916daac2a5d2fef5"
+    },
+    {
+      "component": "progress",
+      "source": "https://sakuga-vfx.vercel.app/progress/progress.js",
+      "sha256": "42357bae8480cdcc32c771b340cf2a9886814bf9de706f24a85994ff6b122b31"
+    },
+    {
+      "component": "rating",
+      "source": "https://sakuga-vfx.vercel.app/rating/rating.js",
+      "sha256": "b71a5886eec572125f666523864d634bc9f319aa66536ba083e60c33706bec55"
+    },
+    {
+      "component": "toast",
+      "source": "https://sakuga-vfx.vercel.app/toast/toast.js",
+      "sha256": "8b47d9e6bca4fad1bfae2aeefd4df45fdb81999dec1a02bbd941eb65ed93394c"
+    },
+    {
+      "component": "tooltip",
+      "source": "https://sakuga-vfx.vercel.app/tooltip/tooltip.js",
+      "sha256": "9929ca509ee0f5978182d71e909df90b6969f3a5dfbe416197f98a498fb25627"
+    }
+  ]
+}
