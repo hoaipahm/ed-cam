@@ -19,12 +19,6 @@
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-## Screenshot
-
-<img src="docs/images/camera-1.2.2.png" alt="Ed-Cam camera screen with a live color preview, compact mode tabs, and a circular shutter button" width="300">
-
-*Ed-Cam 1.2.2 on an Android emulator with the Cyanotype preset at 50% intensity.*
-
 ## Download
 
 | Version | APK | Highlights |
