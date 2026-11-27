@@ -40,7 +40,8 @@ public final class CameraController {
   private Surface previewSurface;
   private CameraCharacteristics characteristics;
   private boolean front, flash, opening, capturing, enabled;
-  private int generation;
+  private int generation, captureSequence;
+  private boolean waitingForFlash, sawPrecapture;
   private Size previewSize;
   private HandlerThread imageThread;
 
@@ -89,11 +90,13 @@ public final class CameraController {
     if (enabled && texture.isAvailable()) open();
   }
 
+  public boolean hasFlash() {
+    return characteristics != null
+        && Boolean.TRUE.equals(characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE));
+  }
+
   public boolean setFlash(boolean requested) {
-    boolean available =
-        characteristics != null
-            && Boolean.TRUE.equals(characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE));
-    flash = requested && available;
+    flash = requested && hasFlash();
     return flash;
   }
 
@@ -153,6 +156,8 @@ public final class CameraController {
                   () -> {
                     if (token == generation) {
                       capturing = false;
+                      waitingForFlash = false;
+                      restorePreview();
                       listener.captured(bytes, front);
                     }
                   });
@@ -276,7 +281,89 @@ public final class CameraController {
       return;
     }
     capturing = true;
-    final int token = generation;
+    final int token = generation, sequence = ++captureSequence;
+    main.postDelayed(
+        () -> {
+          if (token == generation && sequence == captureSequence && capturing) {
+            capturing = false;
+            waitingForFlash = false;
+            restorePreview();
+            listener.error("Camera phản hồi quá lâu. Hãy chụp lại.");
+          }
+        },
+        8000);
+    if (!flash || !hasFlash()) {
+      captureStill(token);
+      return;
+    }
+    // Some phones require the AE precapture cycle before a still request can fire the strobe.
+    waitingForFlash = true;
+    sawPrecapture = false;
+    try {
+      preview.set(CaptureRequest.CONTROL_AE_MODE, flashAeMode());
+      preview.set(
+          CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+          CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START);
+      CameraCaptureSession.CaptureCallback exposure =
+          new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(
+                CameraCaptureSession s, CaptureRequest r, TotalCaptureResult result) {
+              if (token != generation || sequence != captureSequence || !waitingForFlash) return;
+              Integer state = result.get(CaptureResult.CONTROL_AE_STATE);
+              if (state != null && state == CaptureResult.CONTROL_AE_STATE_PRECAPTURE)
+                sawPrecapture = true;
+              if (state == null
+                  || (sawPrecapture && state != CaptureResult.CONTROL_AE_STATE_PRECAPTURE)) {
+                waitingForFlash = false;
+                captureStill(token);
+              }
+            }
+          };
+      session.capture(preview.build(), exposure, main);
+      preview.set(
+          CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+          CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE);
+      session.setRepeatingRequest(preview.build(), exposure, main);
+      // Bounded fallback for HALs that never report PRECAPTURE (including some legacy cameras).
+      main.postDelayed(
+          () -> {
+            if (token == generation && sequence == captureSequence && waitingForFlash) {
+              waitingForFlash = false;
+              captureStill(token);
+            }
+          },
+          1800);
+    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+      waitingForFlash = false;
+      captureStill(token);
+    }
+  }
+
+  private int flashAeMode() {
+    int[] modes = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES);
+    if (modes != null)
+      for (int mode : modes)
+        if (mode == CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH) return mode;
+    return CaptureRequest.CONTROL_AE_MODE_ON;
+  }
+
+  private void restorePreview() {
+    if (session == null || preview == null) return;
+    try {
+      preview.set(
+          CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+          CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE);
+      preview.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+      preview.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+      session.setRepeatingRequest(preview.build(), null, main);
+    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+      android.util.Log.w("EdCamCamera", "Preview restore failed", e);
+    }
+  }
+
+  private void captureStill(final int token) {
+    if (token != generation || camera == null || session == null || !capturing) return;
     try {
       CaptureRequest.Builder request =
           camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
@@ -285,9 +372,10 @@ public final class CameraController {
           CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
       request.set(
           CaptureRequest.CONTROL_AE_MODE,
-          flash
-              ? CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
-              : CaptureRequest.CONTROL_AE_MODE_ON);
+          flash && hasFlash() ? flashAeMode() : CaptureRequest.CONTROL_AE_MODE_ON);
+      request.set(
+          CaptureRequest.FLASH_MODE,
+          flash && hasFlash() ? CaptureRequest.FLASH_MODE_SINGLE : CaptureRequest.FLASH_MODE_OFF);
       Integer sensor = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
       int degrees = rotationDegrees();
       request.set(
@@ -301,21 +389,15 @@ public final class CameraController {
                 CameraCaptureSession s, CaptureRequest r, CaptureFailure f) {
               if (token == generation) {
                 capturing = false;
+                restorePreview();
                 listener.error("Chụp ảnh thất bại. Hãy thử lại.");
               }
             }
           },
           main);
-      main.postDelayed(
-          () -> {
-            if (token == generation && capturing) {
-              capturing = false;
-              listener.error("Camera phản hồi quá lâu. Hãy chụp lại.");
-            }
-          },
-          8000);
-    } catch (CameraAccessException | IllegalStateException e) {
+    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
       capturing = false;
+      restorePreview();
       listener.error("Không chụp được ảnh. Hãy mở lại camera.");
     }
   }
@@ -394,6 +476,8 @@ public final class CameraController {
     generation++;
     opening = false;
     capturing = false;
+    waitingForFlash = false;
+    captureSequence++;
     if (session != null) {
       session.close();
       session = null;
