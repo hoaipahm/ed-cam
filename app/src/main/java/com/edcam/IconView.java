@@ -43,6 +43,21 @@ public final class IconView extends View {
     c.translate((getWidth() - size) / 2, (getHeight() - size) / 2);
     c.scale(size / 24, size / 24);
     switch (icon) {
+      case "mic":
+        c.drawRoundRect(9, 2, 15, 15, 3, 3, paint);
+        c.drawArc(6, 8, 18, 19, 0, 180, false, paint);
+        line(c, 12, 19, 12, 22);
+        line(c, 8, 22, 16, 22);
+        break;
+      case "exposure":
+        c.drawCircle(12, 12, 5, paint);
+        for (int i = 0; i < 8; i++) {
+          c.save();
+          c.rotate(i * 45, 12, 12);
+          line(c, 12, 1, 12, 3);
+          c.restore();
+        }
+        break;
       case "camera":
         c.drawRoundRect(3, 7, 21, 20, 3, 3, paint);
         c.drawCircle(12, 13, 4, paint);
