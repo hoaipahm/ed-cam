@@ -119,6 +119,7 @@
   window.configureTabs = config => {
     if (!['primary', 'camera', 'none'].includes(config.mode)) return;
     state = config;
+    document.body.dataset.screen = config.mode;
     for (const [mode, host] of Object.entries(hosts)) {
       host.classList.toggle('inactive', mode !== state.mode);
       host.style.visibility = mode === state.mode ? 'visible' : 'hidden';
