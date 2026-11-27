@@ -52,3 +52,12 @@ sakuga-button.selected[variant="secondary"]::part(button) { background: var(--sk
 #app-toast { bottom: 200px; }
 
 sakuga-tooltip::part(tip) { translate: calc(-50% + var(--tip-shift, 0px)) 0; max-width: min(220px, calc(100vw - 40px)); }
+
+/* Keep shared particles below controls and status text. */
+canvas.sakuga-fx { z-index: 1 !important; }
+sakuga-button.compact::part(button) {
+  white-space: nowrap;
+  font-size: 12px;
+  padding-inline: 5px;
+}
+sakuga-rating::part(star) { width: min(48px, calc(var(--slot-width) / 5)); }
