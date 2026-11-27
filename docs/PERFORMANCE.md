@@ -1,5 +1,11 @@
 # Hiệu năng và giới hạn
 
+## 1.3.0 (2026-11-28)
+
+Current settings measurements and the exact re-run harness are in [VERIFICATION-1.3.0.md](VERIFICATION-1.3.0.md). On the same API35 software-GPU emulator, one eight-round-trip settings scroll run measured median/p95 62.68/169.72ms and app-process PSS 86,847KB for 1.2.2, versus 28.18/50.22ms and 39,160KB for the final native settings layout. The layout also became more compact. Host-load variation is material; this is not physical-phone performance or a 60fps claim. No WebView is attached to 1.3 screens.
+
+The remaining sections are historical measurements of earlier builds.
+
 ## 1.2.0 (2026-11-27)
 
 - Cache ma trận màu hoàn chỉnh cho 180 style; khi đổi cường độ chỉ nội suy với ma trận gốc.
