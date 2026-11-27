@@ -2,11 +2,21 @@
 
 Ứng dụng camera cá nhân Android, giao diện tiếng Việt. Android 10 trở lên.
 
-Bản mới: `delivery/Ed-Cam-1.1.0.apk`. Thanh tab Sakuga nguyên bản, màu kem–tím–hồng; màn chụp lớn và xử lý ảnh vẫn native. Cách nối sự kiện nằm trong [docs/SAKUGA.md](docs/SAKUGA.md). Số đo và giới hạn hiệu năng nằm trong [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+Bản mới: `delivery/Ed-Cam-1.2.0.apk`. Điều khiển Sakuga gốc cho nút chụp, nút thao tác, tab, công tắc, slider, ô nhập, checkbox, radio, sao, tiến độ, toast và trợ giúp; camera và xử lý ảnh vẫn native. Cách nối sự kiện nằm trong [docs/SAKUGA.md](docs/SAKUGA.md). Số đo và giới hạn hiệu năng nằm trong [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+## Mới ở 1.2.0
+
+- Thêm 120 màu đậm và dễ phân biệt: Duotone, Neon, Hoàng hôn, Băng giá, Nâu cổ, Pop Art, Hồng tím, Xanh điện ảnh, Đơn sắc, Thử nghiệm, Film đậm, Ánh sáng mới. 60 ID cũ được giữ nguyên để album và yêu thích không bị đổi tên style.
+- Công thức màu được tính sẵn; camera, thumbnail và ảnh xuất dùng chung phép biến đổi. Texture hạt film giới hạn 512×512 để giảm công việc và cấp phát cho ảnh lớn.
+- Hộp MÀU có slider Sakuga và so sánh màu gốc. Tên style/cường độ hiện trên khung ngắm. Có đánh dấu ảnh riêng từ 0 đến 5 sao.
+- Flash có chu trình AE precapture, kiểm tra phần cứng, fallback có giới hạn và khôi phục preview sau chụp/lỗi. **Chưa xác nhận đèn LED trên điện thoại thật.**
+- Git được khởi tạo với snapshot 1.1.0 trên `main`; thay đổi mới trên `feat/edcam-1.2`. Chưa cấu hình remote hay push.
+
+Chi tiết kiểm tra: [docs/VERIFICATION-1.2.0.md](docs/VERIFICATION-1.2.0.md).
 
 ## Có gì trong bản này
 
-- 60 preset màu thuộc 10 nhóm; tìm tên không dấu, lưu style yêu thích, chỉnh cường độ.
+- 180 preset màu thuộc 22 nhóm; tìm tên không dấu, lưu style yêu thích, chỉnh cường độ.
 - 5 giao diện lưu theo lựa chọn: Film kem, Đêm tối, Hiện đại, Hồng phấn, Xanh sage.
 - Camera trước/sau, màu xem trực tiếp, lấy nét bằng chạm, flash khi phần cứng hỗ trợ, hẹn giờ 3/10 giây, lưới, tỷ lệ 3:4 / 1:1 / 9:16.
 - Lưu album nội bộ, giữ nguyên bytes ảnh gốc nếu bật tùy chọn, nhập ảnh bằng trình chọn tệp của Android.
