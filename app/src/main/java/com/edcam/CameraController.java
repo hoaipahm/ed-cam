@@ -9,13 +9,17 @@ import android.hardware.camera2.*;
 import android.hardware.camera2.params.*;
 import android.media.Image;
 import android.media.ImageReader;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.Size;
 import android.view.*;
+import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * All Camera2 state transitions run on the main looper. A generation invalidates stale callbacks.
@@ -27,6 +31,12 @@ public final class CameraController {
     void error(String message);
 
     void captured(byte[] jpeg, boolean mirrored);
+
+    default void zoomChanged(float zoom, float min, float max) {}
+
+    default void recordingStarted() {}
+
+    default void recordingFinished(File video, String error) {}
   }
 
   private final Activity activity;
@@ -44,6 +54,13 @@ public final class CameraController {
   private boolean waitingForFlash, sawPrecapture;
   private Size previewSize;
   private HandlerThread imageThread;
+  private CameraCatalog catalog;
+  private CameraCatalog.Lens lens;
+  private float zoom = 1;
+  private int exposure;
+  private boolean videoMode, preparingVideo;
+  private VideoRecorder recording;
+  private final ExecutorService recordingWorker = Executors.newSingleThreadExecutor();
 
   public CameraController(
       Activity activity, TextureView texture, boolean front, Listener listener) {
@@ -80,12 +97,158 @@ public final class CameraController {
     close();
   }
 
+  public void release() {
+    stop();
+    recordingWorker.shutdown();
+  }
+
+  private static Size chooseVideo(Size[] sizes) {
+    if (sizes == null || sizes.length == 0)
+      throw new IllegalArgumentException("Camera không hỗ trợ video.");
+    Size best = null;
+    for (Size size : sizes) {
+      if (size.getWidth() > 1920 || size.getHeight() > 1080) continue;
+      if (Math.abs(size.getWidth() / (float) size.getHeight() - 16f / 9) > .03f) continue;
+      if (best == null || size.getWidth() > best.getWidth()) best = size;
+    }
+    return best == null ? choose(sizes, 1280 * 720) : best;
+  }
+
+  public void startVideo(VideoStore store, boolean audio) {
+    if (!isReady() || recording != null) return;
+    final int token = generation;
+    final VideoRecorder recorder = new VideoRecorder(store);
+    recording = recorder;
+    preparingVideo = true;
+    try {
+      Size size =
+          chooseVideo(
+              characteristics
+                  .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                  .getOutputSizes(android.media.MediaRecorder.class));
+      Integer sensor = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+      int orientation =
+          ((sensor == null ? 90 : sensor) + (front ? rotationDegrees() : -rotationDegrees()) + 360)
+              % 360;
+      recordingWorker.execute(
+          () -> {
+            try {
+              recorder.prepare(size, orientation, audio, () -> main.post(this::stopVideo));
+              main.post(
+                  () -> {
+                    if (token != generation || !enabled || recording != recorder) return;
+                    configureRecording(recorder, token);
+                  });
+            } catch (Exception e) {
+              main.post(
+                  () -> {
+                    if (recording == recorder)
+                      finishRecording(
+                          true,
+                          "Không khởi tạo được quay video. Kiểm tra dung lượng và quyền micro.");
+                  });
+            }
+          });
+    } catch (RuntimeException e) {
+      finishRecording(true, "Camera không hỗ trợ quay video với cấu hình này.");
+    }
+  }
+
+  @SuppressWarnings("deprecation")
+  private void configureRecording(VideoRecorder recorder, int token) {
+    try {
+      if (session != null) session.close();
+      session = null;
+      Surface output = recorder.surface();
+      CaptureRequest.Builder request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+      request.addTarget(previewSurface);
+      request.addTarget(output);
+      autoFocusMode(request, true);
+      applyZoom(request);
+      camera.createCaptureSession(
+          Arrays.asList(previewSurface, output),
+          new CameraCaptureSession.StateCallback() {
+            @Override
+            public void onConfigured(CameraCaptureSession configured) {
+              if (token != generation || recording != recorder) {
+                configured.close();
+                return;
+              }
+              session = configured;
+              preview = request;
+              try {
+                session.setRepeatingRequest(request.build(), null, main);
+                recorder.start();
+                preparingVideo = false;
+                listener.recordingStarted();
+              } catch (CameraAccessException | RuntimeException e) {
+                finishRecording(true, "Không bắt đầu được video. Hãy thử lại.");
+              }
+            }
+
+            @Override
+            public void onConfigureFailed(CameraCaptureSession failed) {
+              if (token == generation && recording == recorder)
+                finishRecording(true, "Camera không hỗ trợ cấu hình quay này.");
+            }
+          },
+          main);
+    } catch (CameraAccessException | RuntimeException e) {
+      finishRecording(true, "Không mở được phiên quay video.");
+    }
+  }
+
+  public void pauseVideo(boolean paused) {
+    if (recording == null || preparingVideo) return;
+    try {
+      recording.pause(paused);
+    } catch (RuntimeException e) {
+      finishRecording(true, "Không thể tạm dừng video trên thiết bị này.");
+    }
+  }
+
+  public void stopVideo() {
+    finishRecording(true, null);
+  }
+
+  private void finishRecording(boolean restore, String reason) {
+    VideoRecorder recorder = recording;
+    if (recorder == null) return;
+    recording = null;
+    preparingVideo = false;
+    final int token = generation;
+    if (session != null) {
+      session.close();
+      session = null;
+    }
+    recordingWorker.execute(
+        () -> {
+          File saved = null;
+          String error = reason;
+          try {
+            saved = recorder.finish();
+          } catch (Exception e) {
+            error = "Video chưa lưu được. Có thể lượt quay quá ngắn hoặc bộ nhớ đã đầy.";
+          }
+          final File result = saved;
+          final String problem = error;
+          main.post(
+              () -> {
+                if (restore && token == generation && enabled && camera != null)
+                  createSession(token);
+                listener.recordingFinished(result, problem);
+              });
+        });
+  }
+
   public boolean isReady() {
-    return session != null && !capturing;
+    return session != null && !capturing && !preparingVideo;
   }
 
   public void flip() {
     front = !front;
+    catalog = null;
+    zoom = 1;
     close();
     if (enabled && texture.isAvailable()) open();
   }
@@ -107,6 +270,114 @@ public final class CameraController {
     texture.invalidate();
   }
 
+  public void setVideoMode(boolean value) {
+    videoMode = value;
+  }
+
+  public boolean isRecording() {
+    return recording != null;
+  }
+
+  public float zoom() {
+    return zoom;
+  }
+
+  public float minZoom() {
+    return recording != null && lens != null ? lens.minZoom() : catalog == null ? 1 : catalog.min;
+  }
+
+  public float maxZoom() {
+    return recording != null && lens != null ? lens.maxZoom() : catalog == null ? 1 : catalog.max;
+  }
+
+  public int minExposure() {
+    android.util.Range<Integer> range =
+        characteristics == null
+            ? null
+            : characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+    return range == null ? 0 : range.getLower();
+  }
+
+  public int maxExposure() {
+    android.util.Range<Integer> range =
+        characteristics == null
+            ? null
+            : characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+    return range == null ? 0 : range.getUpper();
+  }
+
+  public int exposure() {
+    return exposure;
+  }
+
+  public void setExposure(int requested) {
+    exposure = Math.max(minExposure(), Math.min(maxExposure(), requested));
+    if (session == null || preview == null) return;
+    try {
+      preview.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposure);
+      session.setRepeatingRequest(preview.build(), null, main);
+    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+      listener.error("Camera không đổi được độ sáng này.");
+    }
+  }
+
+  public void setZoom(float requested) {
+    if (catalog == null || lens == null) return;
+    float next = ZoomMath.clamp(requested, catalog.min, catalog.max);
+    CameraCatalog.Lens selected = catalog.select(next);
+    if (recording != null && selected != lens) {
+      next = ZoomMath.clamp(next, lens.minZoom(), lens.maxZoom());
+      selected = lens;
+    }
+    zoom = next;
+    listener.zoomChanged(zoom, minZoom(), maxZoom());
+    if (selected != lens) {
+      close();
+      if (enabled) open();
+      return;
+    }
+    if (session == null || preview == null) return;
+    try {
+      applyZoom(preview);
+      session.setRepeatingRequest(preview.build(), null, main);
+    } catch (CameraAccessException | IllegalArgumentException | IllegalStateException e) {
+      listener.error("Camera không đổi được mức zoom này. Hãy thử mức khác.");
+    }
+  }
+
+  private void applyZoom(CaptureRequest.Builder request) {
+    if (lens == null) return;
+    exposure = Math.max(minExposure(), Math.min(maxExposure(), exposure));
+    request.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposure);
+    float local = ZoomMath.clamp(zoom / lens.base, lens.min, lens.max);
+    if (Build.VERSION.SDK_INT >= 30 && lens.ratioControl) {
+      request.set(CaptureRequest.CONTROL_ZOOM_RATIO, local);
+    } else {
+      Rect sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+      if (sensor == null) return;
+      int width = Math.max(1, Math.round(sensor.width() / local));
+      int height = Math.max(1, Math.round(sensor.height() / local));
+      int left = sensor.left + (sensor.width() - width) / 2;
+      int top = sensor.top + (sensor.height() - height) / 2;
+      request.set(
+          CaptureRequest.SCALER_CROP_REGION, new Rect(left, top, left + width, top + height));
+    }
+  }
+
+  private void autoFocusMode(CaptureRequest.Builder request, boolean video) {
+    int desired =
+        video
+            ? CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+            : CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+    int[] modes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES);
+    if (modes != null)
+      for (int mode : modes)
+        if (mode == desired) {
+          request.set(CaptureRequest.CONTROL_AF_MODE, desired);
+          return;
+        }
+  }
+
   private void open() {
     if (!enabled
         || opening
@@ -117,30 +388,22 @@ public final class CameraController {
     final int token = ++generation;
     try {
       CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
-      String selected = null;
-      for (String id : manager.getCameraIdList()) {
-        CameraCharacteristics info = manager.getCameraCharacteristics(id);
-        Integer facing = info.get(CameraCharacteristics.LENS_FACING);
-        if (facing != null
-            && facing
-                == (front
-                    ? CameraCharacteristics.LENS_FACING_FRONT
-                    : CameraCharacteristics.LENS_FACING_BACK)) {
-          selected = id;
-          characteristics = info;
-          break;
-        }
-      }
-      if (selected == null) {
+      if (catalog == null) catalog = new CameraCatalog(manager, front);
+      lens = catalog.select(zoom);
+      if (lens == null) {
         opening = false;
         listener.error(front ? "Thiết bị không có camera trước." : "Không tìm thấy camera sau.");
         return;
       }
+      String selected = lens.id;
+      characteristics = lens.info;
+      zoom = ZoomMath.clamp(zoom, lens.minZoom(), lens.maxZoom());
+      listener.zoomChanged(zoom, minZoom(), maxZoom());
       StreamConfigurationMap map =
           characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
       if (map == null) throw new IllegalStateException("Không có cấu hình camera.");
       Size[] sizes = map.getOutputSizes(SurfaceTexture.class);
-      previewSize = choose(sizes, 1920 * 1080);
+      previewSize = videoMode ? chooseVideo(sizes) : choose(sizes, 1920 * 1080);
       Size jpeg = choose(map.getOutputSizes(ImageFormat.JPEG), 12_500_000);
       reader = ImageReader.newInstance(jpeg.getWidth(), jpeg.getHeight(), ImageFormat.JPEG, 2);
       imageThread = new HandlerThread("EdCamImageReader");
@@ -239,11 +502,12 @@ public final class CameraController {
   @SuppressWarnings("deprecation")
   private void createSession(int token) {
     try {
+      if (previewSurface != null) previewSurface.release();
       previewSurface = new Surface(texture.getSurfaceTexture());
       preview = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
       preview.addTarget(previewSurface);
-      preview.set(
-          CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+      autoFocusMode(preview, videoMode);
+      applyZoom(preview);
       camera.createCaptureSession(
           Arrays.asList(previewSurface, reader.getSurface()),
           new CameraCaptureSession.StateCallback() {
@@ -368,8 +632,8 @@ public final class CameraController {
       CaptureRequest.Builder request =
           camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
       request.addTarget(reader.getSurface());
-      request.set(
-          CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+      autoFocusMode(request, false);
+      applyZoom(request);
       request.set(
           CaptureRequest.CONTROL_AE_MODE,
           flash && hasFlash() ? flashAeMode() : CaptureRequest.CONTROL_AE_MODE_ON);
@@ -403,13 +667,40 @@ public final class CameraController {
   }
 
   public void focus(float x, float y) {
-    if (session == null || preview == null) return;
+    if (session == null || preview == null || preparingVideo) return;
     try {
       Rect sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
       Integer regions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF);
       if (sensor == null || regions == null || regions == 0) return;
-      int cx = (int) (sensor.left + (front ? 1 - y : y) * sensor.width()),
-          cy = (int) (sensor.top + (1 - x) * sensor.height());
+      int[] modes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES);
+      boolean canFocus = false;
+      if (modes != null)
+        for (int mode : modes) if (mode == CaptureRequest.CONTROL_AF_MODE_AUTO) canFocus = true;
+      if (!canFocus) return;
+      Matrix inverse = new Matrix();
+      float[] point = {x * texture.getWidth(), y * texture.getHeight()};
+      if (texture.getTransform(new Matrix()).invert(inverse)) inverse.mapPoints(point);
+      x = Math.max(0, Math.min(1, point[0] / Math.max(1, texture.getWidth())));
+      y = Math.max(0, Math.min(1, point[1] / Math.max(1, texture.getHeight())));
+      if (front) x = 1 - x;
+      Integer orientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+      int rotation = ((orientation == null ? 90 : orientation) - rotationDegrees() + 360) % 360;
+      float sx = x, sy = y;
+      if (rotation == 90) {
+        sx = y;
+        sy = 1 - x;
+      } else if (rotation == 180) {
+        sx = 1 - x;
+        sy = 1 - y;
+      } else if (rotation == 270) {
+        sx = 1 - y;
+        sy = x;
+      }
+      Rect region = preview.get(CaptureRequest.SCALER_CROP_REGION);
+      if (region == null || (Build.VERSION.SDK_INT >= 30 && lens != null && lens.ratioControl))
+        region = sensor;
+      int cx = Math.round(region.left + sx * region.width()),
+          cy = Math.round(region.top + sy * region.height());
       int side = Math.min(sensor.width(), sensor.height()) / 12;
       int left = Math.max(sensor.left, Math.min(sensor.right - side, cx - side / 2)),
           top = Math.max(sensor.top, Math.min(sensor.bottom - side, cy - side / 2));
@@ -429,16 +720,14 @@ public final class CameraController {
           () -> {
             if (token != generation || session == null) return;
             try {
-              preview.set(
-                  CaptureRequest.CONTROL_AF_MODE,
-                  CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+              autoFocusMode(preview, recording != null || videoMode);
               session.setRepeatingRequest(preview.build(), null, main);
             } catch (CameraAccessException | IllegalStateException ignored) {
               /* Session may close while regaining continuous focus. */
             }
           },
           2500);
-    } catch (CameraAccessException | IllegalStateException e) {
+    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
       listener.error("Không thể lấy nét tại điểm này.");
     }
   }
@@ -473,6 +762,7 @@ public final class CameraController {
   }
 
   private void close() {
+    finishRecording(false, null);
     generation++;
     opening = false;
     capturing = false;

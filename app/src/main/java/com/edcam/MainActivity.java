@@ -23,16 +23,41 @@ public final class MainActivity extends Activity {
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   private android.content.SharedPreferences prefs;
   private PhotoStore store;
+  private VideoStore videos;
+  private boolean videoMode, recordingVideo, videoPaused, videoStarting;
+  private boolean recordAfterPermission;
+  private boolean videoAudio = true;
+  private ShutterButton shutterButton;
+  private LinearLayout zoomControls;
+  private TextView zoomLabel, videoClock;
+  private Button pauseRecording;
+  private long videoStarted, pauseStarted, pausedDuration;
+  private final CaptureCountdown captureCountdown = new CaptureCountdown();
+  private final Runnable videoTicker =
+      new Runnable() {
+        @Override
+        public void run() {
+          if (!recordingVideo || destroyed) return;
+          long elapsed =
+              ((videoPaused ? pauseStarted : SystemClock.elapsedRealtime())
+                      - videoStarted
+                      - pausedDuration)
+                  / 1000;
+          if (videoClock != null)
+            videoClock.setText(
+                (videoPaused ? "Tạm dừng · " : "Đang quay · ")
+                    + String.format(Locale.US, "%02d:%02d", elapsed / 60, elapsed % 60));
+          main.postDelayed(this, 250);
+        }
+      };
   private Palette palette;
-  private LinearLayout root, body, presetRow;
+  private LinearLayout root, body;
   private FrameLayout content, viewfinder;
   private TextureView texture;
-  private TextView status, styleTitle, countdown, notice, stampView, presetName;
+  private TextView status, countdown, notice, stampView, presetName;
   private GridOverlay gridOverlay;
   private CameraController camera;
-  private SakugaTabsLayer sakuga, dialogLayer;
   private Dialog controlsDialog;
-  private View tabsAnchor;
   private ProgressBar processingProgress;
   private int progressEpoch;
   private boolean comparing;
@@ -88,6 +113,10 @@ public final class MainActivity extends Activity {
     super.onCreate(state);
     prefs = getSharedPreferences("edcam", MODE_PRIVATE);
     store = new PhotoStore(this);
+    videos = new VideoStore(this);
+    timer = prefs.getInt("timer", 0);
+    if (timer != 0 && timer != 3 && timer != 10) timer = 0;
+    videoAudio = prefs.getBoolean("videoAudio", true);
     styleId = prefs.getInt("style", 0);
     themeId = prefs.getInt("theme", 0);
     strength = prefs.getFloat("strength", 1);
@@ -109,8 +138,6 @@ public final class MainActivity extends Activity {
   protected void onResume() {
     super.onResume();
     resumed = true;
-    if (sakuga != null) sakuga.onResume();
-    if (dialogLayer != null) dialogLayer.onResume();
     if (camera != null) camera.start();
     if (locationEnabled) startLocation();
     main.removeCallbacks(clock);
@@ -119,9 +146,9 @@ public final class MainActivity extends Activity {
 
   @Override
   protected void onPause() {
-    if (sakuga != null) sakuga.onPause();
-    if (dialogLayer != null) dialogLayer.onPause();
     resumed = false;
+    captureCountdown.cancel();
+    if (countdown != null) countdown.setVisibility(View.GONE);
     main.removeCallbacks(clock);
     stopLocation();
     if (camera != null) camera.stop();
@@ -141,11 +168,12 @@ public final class MainActivity extends Activity {
 
   @Override
   protected void onDestroy() {
-    if (controlsDialog != null) controlsDialog.dismiss();
-    if (sakuga != null) {
-      sakuga.release();
-      sakuga = null;
+    if (camera != null) {
+      camera.release();
+      camera = null;
     }
+    clearEditor();
+    if (controlsDialog != null) controlsDialog.dismiss();
     thumbnails.evictAll();
     destroyed = true;
     uiGeneration++;
@@ -156,6 +184,10 @@ public final class MainActivity extends Activity {
 
   @Override
   public void onBackPressed() {
+    if (recordingVideo || videoStarting) {
+      stopRecording();
+      return;
+    }
     if (busy) {
       message("Đang xử lý ảnh, bạn chờ một chút nhé.");
       return;
@@ -177,6 +209,18 @@ public final class MainActivity extends Activity {
     super.onBackPressed();
   }
 
+  @Override
+  public boolean onKeyDown(int key, android.view.KeyEvent event) {
+    if ((key == KeyEvent.KEYCODE_VOLUME_UP || key == KeyEvent.KEYCODE_VOLUME_DOWN)
+        && tab == 0
+        && !editor
+        && detail == null) {
+      if (event.getRepeatCount() == 0 && shutterButton != null) shutterButton.performClick();
+      return true;
+    }
+    return super.onKeyDown(key, event);
+  }
+
   private int dp(float value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
   }
@@ -184,6 +228,8 @@ public final class MainActivity extends Activity {
   private void remember() {
     prefs
         .edit()
+        .putInt("timer", timer)
+        .putBoolean("videoAudio", videoAudio)
         .putInt("style", styleId)
         .putInt("theme", themeId)
         .putFloat("strength", strength)
@@ -199,20 +245,22 @@ public final class MainActivity extends Activity {
 
   private void render() {
     if (camera != null) {
-      camera.stop();
+      camera.release();
       camera = null;
     }
+    captureCountdown.cancel();
     uiGeneration++;
+    shutterButton = null;
+    zoomControls = null;
+    zoomLabel = null;
+    videoClock = null;
     texture = null;
     stampView = null;
     presetName = null;
     status = null;
-    styleTitle = null;
-    presetRow = null;
     countdown = null;
     viewfinder = null;
     notice = null;
-    tabsAnchor = null;
     comparing = false;
     palette = Palette.get(themeId);
     setTheme(
@@ -231,12 +279,6 @@ public final class MainActivity extends Activity {
     getWindow().setStatusBarColor(Color.TRANSPARENT);
     getWindow().setNavigationBarColor(shooting ? Color.BLACK : palette.background);
     int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
-    if (shooting)
-      flags |=
-          View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-              | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-              | View.SYSTEM_UI_FLAG_FULLSCREEN
-              | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
     if (!palette.dark && !shooting)
       flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
     getWindow().getDecorView().setSystemUiVisibility(flags);
@@ -244,13 +286,12 @@ public final class MainActivity extends Activity {
         (v, insets) -> {
           android.view.DisplayCutout cutout = insets.getDisplayCutout();
           int top =
-              shooting
-                  ? (cutout == null ? 0 : cutout.getSafeInsetTop())
-                  : insets.getSystemWindowInsetTop();
+              Math.max(
+                  insets.getSystemWindowInsetTop(), cutout == null ? 0 : cutout.getSafeInsetTop());
           int bottom =
-              shooting
-                  ? (cutout == null ? 0 : cutout.getSafeInsetBottom())
-                  : insets.getStableInsetBottom();
+              Math.max(
+                  insets.getSystemWindowInsetBottom(),
+                  cutout == null ? 0 : cutout.getSafeInsetBottom());
           v.setPadding(0, top, 0, bottom);
           return insets;
         });
@@ -277,50 +318,15 @@ public final class MainActivity extends Activity {
     notice.setVisibility(View.GONE);
     notice.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
     FrameLayout.LayoutParams np = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-    np.setMargins(dp(16), 0, dp(16), dp(12));
+    np.setMargins(dp(16), 0, dp(16), shooting ? dp(148) : dp(12));
     content.addView(notice, np);
     processingProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
     processingProgress.setMax(100);
     processingProgress.setContentDescription("Tiến độ xử lý: giải mã, áp màu, lưu ảnh");
     processingProgress.setVisibility(View.GONE);
-    FrameLayout.LayoutParams progressParams =
-        new FrameLayout.LayoutParams(-1, dp(230), Gravity.CENTER);
-    progressParams.setMargins(dp(26), 0, dp(26), 0);
+    FrameLayout.LayoutParams progressParams = new FrameLayout.LayoutParams(-1, dp(4), Gravity.TOP);
     content.addView(processingProgress, progressParams);
-    try {
-      if (sakuga == null || sakuga.unavailable())
-        sakuga = new SakugaTabsLayer(this, this::sakugaChanged);
-      if (sakuga.getParent() instanceof ViewGroup)
-        ((ViewGroup) sakuga.getParent()).removeView(sakuga);
-      scene.addView(sakuga, new FrameLayout.LayoutParams(-1, -1));
-      sakuga.target(tabsAnchor, shooting ? "camera" : "primary", shooting ? 1 : tab, palette, root);
-    } catch (RuntimeException unavailable) {
-      sakuga = null;
-      if (tabsAnchor != null) tabsAnchor.setVisibility(View.VISIBLE);
-    }
     remember();
-  }
-
-  private void sakugaChanged(String mode, String value, int index) {
-    if (busy) {
-      if (sakuga != null) sakuga.synchronizeSelection(mode.equals("camera") ? 1 : tab);
-      return;
-    }
-    if (mode.equals("camera") && value.equals("color")) {
-      showStrength();
-      return;
-    }
-    int target =
-        value.equals("camera")
-            ? 0
-            : value.equals("styles")
-                ? 1
-                : value.equals("album") ? 2 : value.equals("settings") ? 3 : -1;
-    if (target < 0 || target == tab) return;
-    if (target == 1) snapshotStylePreview();
-    tab = target;
-    detail = null;
-    render();
   }
 
   private void header() {
@@ -329,7 +335,14 @@ public final class MainActivity extends Activity {
     if (editor || detail != null)
       bar.addView(iconButton("back", "Quay lại", () -> onBackPressed(), false));
     TextView name =
-        text(editor ? "Chỉnh ảnh" : detail != null ? "Khoảnh khắc" : "Ed-Cam", 20, palette.ink);
+        text(
+            editor
+                ? "Chỉnh ảnh"
+                : detail != null
+                    ? "Khoảnh khắc"
+                    : tab == 1 ? "Bộ màu" : tab == 2 ? "Album" : tab == 3 ? "Cài đặt" : "Ed-Cam",
+            20,
+            palette.ink);
     name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
     name.setGravity(Gravity.CENTER_VERTICAL);
     name.setMaxLines(1);
@@ -409,138 +422,76 @@ public final class MainActivity extends Activity {
       bar.addView(item, new LinearLayout.LayoutParams(0, dp(56), 1));
     }
     root.addView(bar, new LinearLayout.LayoutParams(-1, dp(76)));
-    tabsAnchor = bar;
   }
 
   private void cameraScreen() {
-    FrameLayout workspace = new FrameLayout(this);
-    workspace.setBackgroundColor(Color.BLACK);
-    body.addView(workspace, new LinearLayout.LayoutParams(-1, -1));
-    viewfinder = new FrameLayout(this);
-    viewfinder.setBackgroundColor(Color.rgb(18, 18, 18));
-    FrameLayout stage =
-        new FrameLayout(this) {
-          @Override
-          protected void onMeasure(int ws, int hs) {
-            super.onMeasure(ws, hs);
-            int w = getMeasuredWidth(), h = getMeasuredHeight();
-            float ratio = RATIOS[ratioId];
-            int cw = Math.min(w, Math.round(h * ratio)), ch = Math.min(h, Math.round(cw / ratio));
-            if (getChildCount() > 0)
-              getChildAt(0)
-                  .measure(
-                      MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY),
-                      MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY));
-          }
-        };
-    stage.setBackgroundColor(Color.BLACK);
-    stage.addView(viewfinder, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-    FrameLayout.LayoutParams stageParams = new FrameLayout.LayoutParams(-1, -1);
-    stageParams.bottomMargin = dp(160);
-    workspace.addView(stage, stageParams);
-    FocusTextureView focusTexture = new FocusTextureView(this);
-    texture = focusTexture;
-    viewfinder.addView(texture, new FrameLayout.LayoutParams(-1, -1));
-    gridOverlay = new GridOverlay(this);
-    viewfinder.addView(gridOverlay, new FrameLayout.LayoutParams(-1, -1));
-    gridOverlay.setVisibility(grid ? View.VISIBLE : View.GONE);
-    stampView = text(previewStamp(), 11, Color.WHITE);
-    stampView.setShadowLayer(3, 0, 1, Color.BLACK);
-    stampView.setPadding(dp(16), dp(8), dp(16), dp(14));
-    viewfinder.addView(stampView, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
-    if (!stampEnabled && !locationEnabled) stampView.setVisibility(View.GONE);
-    status = text("Đang mở camera…", 14, Color.WHITE);
-    status.setGravity(Gravity.CENTER);
-    status.setPadding(dp(24), dp(20), dp(24), dp(20));
-    viewfinder.addView(status, new FrameLayout.LayoutParams(-1, -1));
-    status.setOnClickListener(v -> requestCamera());
-    countdown = text("", 64, Color.WHITE);
-    countdown.setGravity(Gravity.CENTER);
-    countdown.setShadowLayer(6, 0, 2, Color.BLACK);
-    countdown.setVisibility(View.GONE);
-    countdown.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
-    viewfinder.addView(countdown, new FrameLayout.LayoutParams(-1, -1));
-    focusTexture.setFocusListener(
-        (x, y) -> {
-          if (camera != null) camera.focus(x, y);
-          gridOverlay.focus(x * texture.getWidth(), y * texture.getHeight());
-        });
-    texture.setContentDescription("Khung ngắm camera. Chạm để lấy nét.");
-
-    presetName =
-        text(Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%", 13, Color.WHITE);
-    presetName.setGravity(Gravity.CENTER);
-    presetName.setPadding(dp(12), dp(7), dp(12), dp(7));
-    presetName.setBackground(round(0xAA000000, 12));
-    LinearLayout photoLabels = new LinearLayout(this);
-    photoLabels.setOrientation(LinearLayout.VERTICAL);
-    photoLabels.setGravity(Gravity.CENTER_HORIZONTAL);
-    viewfinder.removeView(stampView);
-    photoLabels.addView(presetName, new LinearLayout.LayoutParams(-2, -2));
-    photoLabels.addView(stampView, new LinearLayout.LayoutParams(-1, -2));
-    FrameLayout.LayoutParams presetLabelParams =
-        new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-    presetLabelParams.bottomMargin = dp(12);
-    viewfinder.addView(photoLabels, presetLabelParams);
+    body.setBackgroundColor(Color.BLACK);
     LinearLayout tools = row();
     tools.setPadding(dp(8), 0, dp(8), 0);
-    tools.setBackgroundColor(0x99000000);
     tools.addView(
-        cameraAction(
-            "flash",
-            flash ? "Flash bật" : "Flash tắt",
+        cameraTool(
+            videoMode ? "mic" : "flash",
+            videoMode ? (videoAudio ? "Micro bật" : "Micro tắt") : "Flash",
             () -> {
-              if (camera == null) return;
-              if (!camera.isReady()) {
-                message("Chờ camera sẵn sàng rồi bật flash.");
+              if (busy || camera == null) return;
+              if (videoMode) {
+                videoAudio = !videoAudio;
+                remember();
+                render();
                 return;
               }
               if (!camera.hasFlash()) {
-                message("Camera đang chọn không có đèn flash. Thử camera sau.");
+                message("Camera này không có đèn flash.");
                 return;
               }
               flash = camera.setFlash(!flash);
-              message(flash ? "Flash bật · đèn sáng khi chụp ảnh." : "Flash đã tắt.");
-              remember();
               updateCameraActions();
             }));
     tools.addView(
-        cameraAction(
-            "timer",
-            timer == 0 ? "Hẹn giờ" : timer + " giây",
+        cameraTool(
+            videoMode ? "exposure" : "timer",
+            videoMode ? "Độ sáng" : "Hẹn giờ",
             () -> {
+              if (busy) return;
+              if (videoMode) {
+                zoomDialog();
+                return;
+              }
               timer = timer == 0 ? 3 : timer == 3 ? 10 : 0;
               remember();
               updateCameraActions();
             }));
     tools.addView(
-        cameraAction(
-            "grid",
-            grid ? "Lưới bật" : "Lưới tắt",
+        cameraTool(
+            "ratio",
+            videoMode ? "16:9" : RATIO_NAMES[ratioId],
             () -> {
-              grid = !grid;
-              if (gridOverlay != null) gridOverlay.setVisibility(grid ? View.VISIBLE : View.GONE);
-              remember();
-              updateCameraActions();
+              if (!busy && !videoMode) {
+                ratioId = (ratioId + 1) % 3;
+                remember();
+                render();
+              }
             }));
-    TextView ratio = text(RATIO_NAMES[ratioId], 13, Color.WHITE);
-    ratio.setGravity(Gravity.CENTER);
-    ratio.setTag("sakuga-ratio");
-    ratio.setBackground(ripple(Color.TRANSPARENT, 24));
-    ratio.setContentDescription("Tỷ lệ " + RATIO_NAMES[ratioId]);
-    ratio.setOnClickListener(
-        v -> {
-          if (!busy) {
-            ratioId = (ratioId + 1) % 3;
-            ratio.setText(RATIO_NAMES[ratioId]);
-            ratio.setContentDescription("Tỷ lệ " + RATIO_NAMES[ratioId]);
-            remember();
-            stage.requestLayout();
-          }
-        });
-    tools.addView(ratio, new LinearLayout.LayoutParams(0, dp(48), 1));
     tools.addView(
-        cameraAction(
+        cameraTool(
+            videoMode ? "grid" : "styles",
+            videoMode ? "Lưới" : "Bộ màu",
+            () -> {
+              if (videoMode) {
+                grid = !grid;
+                remember();
+                gridOverlay.setVisibility(grid ? View.VISIBLE : View.GONE);
+                updateCameraActions();
+                return;
+              }
+              if (!busy && !videoMode) {
+                snapshotStylePreview();
+                tab = 1;
+                render();
+              }
+            }));
+    tools.addView(
+        cameraTool(
             "settings",
             "Cài đặt",
             () -> {
@@ -549,60 +500,133 @@ public final class MainActivity extends Activity {
                 render();
               }
             }));
-    workspace.addView(tools, new FrameLayout.LayoutParams(-1, dp(48), Gravity.TOP));
 
-    LinearLayout dock = new LinearLayout(this);
-    dock.setOrientation(LinearLayout.VERTICAL);
-    dock.setBackgroundColor(Color.BLACK);
-    LinearLayout modes = row();
-    modes.setPadding(dp(14), 0, dp(14), 0);
-    TextView styles = text("STYLE", 12, Color.WHITE);
-    styles.setGravity(Gravity.CENTER);
-    styles.setContentDescription("Mở thư viện style");
-    styles.setBackground(ripple(Color.TRANSPARENT, 12));
-    styles.setOnClickListener(
-        v -> {
-          if (!busy) {
-            snapshotStylePreview();
-            tab = 1;
-            render();
+    FrameLayout stage =
+        new FrameLayout(this) {
+          @Override
+          protected void onMeasure(int ws, int hs) {
+            super.onMeasure(ws, hs);
+            float ratio = videoMode ? 9f / 16 : RATIOS[ratioId];
+            int w = Math.min(getMeasuredWidth(), Math.round(getMeasuredHeight() * ratio));
+            int h = Math.min(getMeasuredHeight(), Math.round(w / ratio));
+            if (getChildCount() > 0)
+              getChildAt(0)
+                  .measure(
+                      MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
+                      MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY));
           }
+        };
+    body.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
+    viewfinder = new FrameLayout(this);
+    stage.addView(viewfinder, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+    FocusTextureView focusTexture = new FocusTextureView(this);
+    texture = focusTexture;
+    viewfinder.addView(texture, new FrameLayout.LayoutParams(-1, -1));
+    gridOverlay = new GridOverlay(this);
+    gridOverlay.setVisibility(grid ? View.VISIBLE : View.GONE);
+    viewfinder.addView(gridOverlay, new FrameLayout.LayoutParams(-1, -1));
+    focusTexture.setFocusListener(
+        (x, y) -> {
+          if (camera != null && !videoStarting) camera.focus(x, y);
+          gridOverlay.focus(x * texture.getWidth(), y * texture.getHeight());
         });
-    modes.addView(styles, new LinearLayout.LayoutParams(0, dp(48), 1));
-    styleTitle = text("ẢNH", 12, Color.rgb(255, 213, 65));
-    styleTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-    styleTitle.setGravity(Gravity.CENTER);
-    modes.addView(styleTitle, new LinearLayout.LayoutParams(0, dp(48), 1));
-    TextView intensity = text("MÀU " + Math.round(strength * 100) + "%", 12, Color.WHITE);
-    intensity.setGravity(Gravity.CENTER);
-    intensity.setContentDescription("Cường độ style");
-    intensity.setBackground(ripple(Color.TRANSPARENT, 12));
-    intensity.setOnClickListener(
+    focusTexture.setZoomListener(
+        factor -> {
+          if (camera != null) camera.setZoom(camera.zoom() * factor);
+        });
+    texture.setContentDescription("Khung ngắm. Chạm lấy nét, chụm hai ngón để zoom.");
+    stampView = text(previewStamp(), 11, Color.WHITE);
+    stampView.setPadding(dp(12), dp(8), dp(12), dp(8));
+    stampView.setShadowLayer(3, 0, 1, Color.BLACK);
+    if (!stampEnabled && !locationEnabled) stampView.setVisibility(View.GONE);
+    FrameLayout.LayoutParams stampParams = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+    stampParams.bottomMargin = dp(102);
+    viewfinder.addView(stampView, stampParams);
+    status = text("Đang mở camera…", 15, Color.WHITE);
+    status.setPadding(dp(20), dp(20), dp(20), dp(20));
+    status.setGravity(Gravity.CENTER);
+    status.setOnClickListener(v -> requestCamera());
+    viewfinder.addView(status, new FrameLayout.LayoutParams(-1, -1));
+    countdown = text("", 56, Color.WHITE);
+    countdown.setGravity(Gravity.CENTER);
+    countdown.setShadowLayer(5, 0, 1, Color.BLACK);
+    countdown.setVisibility(View.GONE);
+    countdown.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
+    viewfinder.addView(countdown, new FrameLayout.LayoutParams(-1, -1));
+
+    LinearLayout zoomRow = row();
+    HorizontalScrollView zoomScroll = new HorizontalScrollView(this);
+    zoomScroll.setHorizontalScrollBarEnabled(false);
+    zoomControls = row();
+    zoomControls.setGravity(Gravity.CENTER);
+    zoomScroll.addView(zoomControls);
+    zoomRow.addView(zoomScroll, new LinearLayout.LayoutParams(0, dp(48), 1));
+    zoomLabel = text("1×", 13, Color.WHITE);
+    zoomLabel.setGravity(Gravity.CENTER);
+    zoomLabel.setContentDescription("Chỉnh zoom liên tục");
+    zoomLabel.setBackground(cameraRipple());
+    zoomLabel.setOnClickListener(v -> zoomDialog());
+    zoomRow.addView(zoomLabel, new LinearLayout.LayoutParams(dp(64), dp(48)));
+    zoomRow.setBackgroundColor(0x99000000);
+    stage.addView(zoomRow, new FrameLayout.LayoutParams(-1, dp(48), Gravity.BOTTOM));
+
+    presetName =
+        text(
+            videoMode
+                ? "MP4 · 30 fps"
+                : Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%",
+            12,
+            Color.WHITE);
+    presetName.setGravity(Gravity.CENTER);
+    presetName.setPadding(dp(12), dp(8), dp(12), dp(8));
+    presetName.setMaxLines(1);
+    presetName.setEllipsize(android.text.TextUtils.TruncateAt.END);
+    presetName.setBackground(
+        new RippleDrawable(
+            ColorStateList.valueOf(0x44ffffff), round(0xb0000000, 16), round(Color.WHITE, 16)));
+    presetName.setMinimumHeight(dp(48));
+    presetName.setContentDescription(videoMode ? "Video màu gốc" : "Cường độ style");
+    presetName.setOnClickListener(
         v -> {
-          if (!busy) showStrength();
+          if (!videoMode && !busy) showStrength();
         });
-    modes.addView(intensity, new LinearLayout.LayoutParams(0, dp(48), 1));
-    dock.addView(modes, new LinearLayout.LayoutParams(-1, dp(64)));
-    tabsAnchor = modes;
+    FrameLayout.LayoutParams presetParams =
+        new FrameLayout.LayoutParams(-2, dp(48), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+    presetParams.bottomMargin = dp(52);
+    presetParams.leftMargin = dp(12);
+    presetParams.rightMargin = dp(12);
+    stage.addView(presetName, presetParams);
+    tools.setBackgroundColor(0xb0000000);
+    stage.addView(tools, new FrameLayout.LayoutParams(-1, dp(56), Gravity.TOP));
+
     LinearLayout capture = row();
-    capture.setGravity(Gravity.CENTER);
-    capture.setPadding(dp(22), 0, dp(22), dp(8));
-    FrameLayout left = new FrameLayout(this), right = new FrameLayout(this);
-    left.addView(
-        whiteAction(
+    capture.setPadding(dp(20), dp(4), dp(20), dp(4));
+    capture.addView(
+        cameraTool(
             "album",
-            "Album ảnh",
+            "Album",
             () -> {
               if (!busy) {
                 tab = 2;
                 render();
               }
             }),
-        new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
-    right.addView(
-        whiteAction(
+        new LinearLayout.LayoutParams(0, dp(80), 1));
+    shutterButton = new ShutterButton(this);
+    shutterButton.state(videoMode, false);
+    shutterButton.setOnClickListener(
+        v -> {
+          v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+          if (videoMode) {
+            if (recordingVideo || videoStarting) stopRecording();
+            else beginRecording();
+          } else beginCapture();
+        });
+    capture.addView(shutterButton, new LinearLayout.LayoutParams(dp(80), dp(80)));
+    capture.addView(
+        cameraTool(
             "flip",
-            "Đổi camera trước hoặc sau",
+            "Đổi camera",
             () -> {
               if (!busy && camera != null) {
                 flash = false;
@@ -610,130 +634,358 @@ public final class MainActivity extends Activity {
                 camera.flip();
               }
             }),
-        new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
-    capture.addView(left, new LinearLayout.LayoutParams(0, dp(88), 1));
-    FrameLayout shutter = new FrameLayout(this);
-    GradientDrawable ring = round(Color.TRANSPARENT, 40);
-    ring.setStroke(dp(3), Color.WHITE);
-    shutter.setBackground(
-        new RippleDrawable(ColorStateList.valueOf(0x66ffffff), ring, round(Color.WHITE, 40)));
-    shutter.setContentDescription("Chụp ảnh ngay");
-    View core = new View(this);
-    core.setBackground(round(Color.WHITE, 32));
-    shutter.addView(core, new FrameLayout.LayoutParams(dp(60), dp(60), Gravity.CENTER));
-    shutter.setOnClickListener(
-        v -> {
-          v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-          beginCapture();
-        });
-    capture.addView(shutter, new LinearLayout.LayoutParams(dp(76), dp(76)));
-    capture.addView(right, new LinearLayout.LayoutParams(0, dp(88), 1));
-    dock.addView(capture, new LinearLayout.LayoutParams(-1, dp(96)));
-    workspace.addView(dock, new FrameLayout.LayoutParams(-1, dp(160), Gravity.BOTTOM));
+        new LinearLayout.LayoutParams(0, dp(80), 1));
+    body.addView(capture, new LinearLayout.LayoutParams(-1, dp(88)));
+
+    LinearLayout modes = row();
+    modes.setPadding(dp(32), 0, dp(32), 0);
+    for (int i = 0; i < 2; i++) {
+      final boolean target = i == 1;
+      Button mode =
+          cameraText(
+              target ? "Video" : "Ảnh",
+              () -> {
+                if (!busy && videoMode != target) {
+                  videoMode = target;
+                  render();
+                }
+              });
+      mode.setTextColor(videoMode == target ? 0xffffd45c : 0xffaaaaaa);
+      mode.setTypeface(
+          Typeface.create(
+              videoMode == target ? "sans-serif-medium" : "sans-serif", Typeface.NORMAL));
+      mode.setSelected(videoMode == target);
+      mode.setTag(target ? "mode-video" : "mode-photo");
+      modes.addView(mode, new LinearLayout.LayoutParams(0, dp(48), 1));
+    }
+    videoClock = text("Sẵn sàng", 12, 0xffffa5ad);
+    videoClock.setGravity(Gravity.CENTER);
+    videoClock.setVisibility(View.GONE);
+    modes.addView(videoClock, new LinearLayout.LayoutParams(0, dp(48), 2));
+    pauseRecording = cameraText("Tạm dừng", this::toggleVideoPause);
+    pauseRecording.setVisibility(View.GONE);
+    modes.addView(pauseRecording, new LinearLayout.LayoutParams(0, dp(48), 1));
+    body.addView(modes, new LinearLayout.LayoutParams(-1, dp(48)));
+
     camera =
         new CameraController(
             this,
             texture,
             frontLens,
             new CameraController.Listener() {
+              @Override
               public void ready() {
+                if (camera == null) return;
                 flash = camera.setFlash(flash);
                 updateCameraActions();
+                camera.setExposure(prefs.getInt("exposure", 0));
                 if (status != null) status.setVisibility(View.GONE);
                 applyLive();
-                main.postDelayed(
-                    () -> {
-                      if (texture != null && texture.isAvailable() && sample == null) {
-                        sample = texture.getBitmap(96, 128);
-                        populateStrip();
-                      }
-                    },
-                    900);
+                if (recordAfterPermission
+                    && resumed
+                    && videoMode
+                    && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                        == PackageManager.PERMISSION_GRANTED) {
+                  recordAfterPermission = false;
+                  beginRecording();
+                }
               }
 
+              @Override
               public void error(String error) {
-                boolean wasBusy = busy;
+                if (recordingVideo || videoStarting || (pending != null && pending.processing)) {
+                  message(error);
+                  return;
+                }
                 busy = false;
                 pending = null;
+                captureCountdown.cancel();
                 if (countdown != null) countdown.setVisibility(View.GONE);
-                if (status != null && !camera.isReady()) {
+                if (status != null && camera != null && !camera.isReady()) {
                   status.setVisibility(View.VISIBLE);
                   status.setText(error);
                 }
-                if (wasBusy || camera.isReady()) message(error);
+                message(error);
               }
 
+              @Override
               public void captured(byte[] jpeg, boolean mirrored) {
                 if (pending == null) {
                   busy = false;
                   return;
                 }
-                CaptureSettings request = pending;
-                request.processing = true;
-                processPhoto(jpeg, mirrored, request);
+                pending.processing = true;
+                processPhoto(jpeg, mirrored, pending);
+              }
+
+              @Override
+              public void zoomChanged(float zoom, float min, float max) {
+                updateZoom(zoom, min, max);
+              }
+
+              @Override
+              public void recordingStarted() {
+                videoStarting = false;
+                recordingVideo = true;
+                videoPaused = false;
+                videoStarted = SystemClock.elapsedRealtime();
+                pausedDuration = 0;
+                if (shutterButton != null) shutterButton.state(true, true);
+                lockRecordingControls(true);
+                videoClock.setVisibility(View.VISIBLE);
+                pauseRecording.setVisibility(View.VISIBLE);
+                main.removeCallbacks(videoTicker);
+                videoTicker.run();
+              }
+
+              @Override
+              public void recordingFinished(File video, String error) {
+                recordingVideo = false;
+                videoStarting = false;
+                videoPaused = false;
+                busy = false;
+                main.removeCallbacks(videoTicker);
+                if (destroyed) return;
+                if (shutterButton != null) shutterButton.state(videoMode, false);
+                if (videoClock != null) videoClock.setVisibility(View.GONE);
+                if (pauseRecording != null) pauseRecording.setVisibility(View.GONE);
+                lockRecordingControls(false);
+                message(
+                    error != null
+                        ? error
+                        : video != null ? "Đã lưu video vào album Ed-Cam." : "Đã hủy quay video.");
               }
             });
-    if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-      status.setText(
-          "Bắt đầu một khoảnh khắc\n\n"
-              + "Chạm để cho phép dùng camera.\n"
-              + "Ảnh được xử lý trên điện thoại của bạn.");
-    } else if (resumed) camera.start();
+    camera.setVideoMode(videoMode);
+    if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
+      status.setText("Chạm để cấp quyền camera.\nBạn vẫn có thể nhập ảnh từ Album.");
+    else if (resumed) camera.start();
   }
 
-  private FrameLayout whiteAction(String icon, String label, Runnable action) {
-    FrameLayout box = new FrameLayout(this);
-    box.setContentDescription(label);
-    box.setTag("camera-" + icon);
-    box.setBackground(ripple(Color.TRANSPARENT, 28));
-    boolean active =
-        (icon.equals("flash") && flash)
-            || (icon.equals("grid") && grid)
-            || (icon.equals("timer") && timer > 0);
-    box.addView(
-        new IconView(this, icon, active ? Color.rgb(255, 213, 65) : Color.WHITE),
-        new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER));
-    if (icon.equals("timer") && timer > 0) {
-      TextView badge = text(timer + "s", 10, Color.rgb(255, 213, 65));
-      badge.setGravity(Gravity.CENTER);
-      FrameLayout.LayoutParams badgeParams =
-          new FrameLayout.LayoutParams(dp(24), dp(20), Gravity.BOTTOM | Gravity.END);
-      badgeParams.rightMargin = dp(4);
-      box.addView(badge, badgeParams);
+  private Drawable cameraRipple() {
+    return new RippleDrawable(
+        ColorStateList.valueOf(0x44ffffff), round(Color.TRANSPARENT, 24), round(Color.WHITE, 24));
+  }
+
+  private void lockRecordingControls(boolean locked) {
+    for (String tag :
+        new String[] {
+          "camera-mic",
+          "camera-exposure",
+          "camera-ratio",
+          "camera-settings",
+          "camera-album",
+          "camera-flip",
+          "mode-photo",
+          "mode-video"
+        }) {
+      View control = body.findViewWithTag(tag);
+      if (control != null) {
+        control.setEnabled(!locked);
+        control.setAlpha(locked ? .4f : 1f);
+        if (tag.startsWith("mode-")) control.setVisibility(locked ? View.GONE : View.VISIBLE);
+      }
     }
-    box.setOnClickListener(
+  }
+
+  private Button cameraText(String label, Runnable action) {
+    Button button = button(label, action, false);
+    button.setTextColor(Color.WHITE);
+    button.setTextSize(13);
+    button.setPadding(dp(6), 0, dp(6), 0);
+    button.setMinWidth(0);
+    button.setMinimumWidth(0);
+    button.setBackground(cameraRipple());
+    return button;
+  }
+
+  private View cameraTool(String icon, String label, Runnable action) {
+    LinearLayout item = new LinearLayout(this);
+    item.setOrientation(LinearLayout.VERTICAL);
+    item.setGravity(Gravity.CENTER);
+    item.setContentDescription(label);
+    item.setTag("camera-" + icon);
+    item.addView(
+        new IconView(this, icon, Color.WHITE), new LinearLayout.LayoutParams(dp(23), dp(23)));
+    TextView caption = text(label, 11, Color.WHITE);
+    caption.setGravity(Gravity.CENTER);
+    caption.setPadding(0, dp(3), 0, 0);
+    caption.setMaxLines(1);
+    caption.setEllipsize(android.text.TextUtils.TruncateAt.END);
+    item.addView(caption, new LinearLayout.LayoutParams(-1, -2));
+    item.setBackground(cameraRipple());
+    item.setMinimumWidth(dp(48));
+    item.setMinimumHeight(dp(48));
+    item.setOnClickListener(
         v -> {
-          if (!busy) {
-            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-            action.run();
+          v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+          action.run();
+        });
+    item.setLayoutParams(new LinearLayout.LayoutParams(0, dp(56), 1));
+    return item;
+  }
+
+  private String zoomText(float value) {
+    return String.format(
+        Locale.US, Math.abs(value - Math.round(value)) < .04f ? "%.0f×" : "%.1f×", value);
+  }
+
+  private void updateZoom(float zoom, float min, float max) {
+    if (zoomControls == null || zoomLabel == null) return;
+    zoomLabel.setText(zoomText(zoom));
+    String range = min + ":" + max;
+    if (!range.equals(zoomControls.getTag())) {
+      zoomControls.setTag(range);
+      zoomControls.removeAllViews();
+      for (float value : ZoomMath.stops(min, max)) {
+        Button button =
+            cameraText(
+                zoomText(value),
+                () -> {
+                  if (camera != null) camera.setZoom(value);
+                });
+        button.setTag(value);
+        button.setContentDescription("Zoom " + zoomText(value));
+        zoomControls.addView(button, new LinearLayout.LayoutParams(dp(52), dp(48)));
+      }
+    }
+    for (int i = 0; i < zoomControls.getChildCount(); i++) {
+      Button b = (Button) zoomControls.getChildAt(i);
+      boolean selected = Math.abs(((Float) b.getTag()) - zoom) < .05f;
+      b.setTextColor(selected ? 0xffffd45c : Color.WHITE);
+      b.setSelected(selected);
+    }
+  }
+
+  private void zoomDialog() {
+    if (camera == null || !camera.isReady() || recordingVideo) return;
+    float min = camera.minZoom(), max = camera.maxZoom();
+    LinearLayout panel = new LinearLayout(this);
+    panel.setOrientation(LinearLayout.VERTICAL);
+    panel.setPadding(dp(20), dp(12), dp(20), dp(12));
+    TextView value = text(zoomText(camera.zoom()), 20, palette.ink);
+    panel.addView(value);
+    SeekBar seek = new SeekBar(this);
+    seek.setMax(1000);
+    seek.setProgress(max <= min ? 0 : Math.round((camera.zoom() - min) / (max - min) * 1000));
+    seek.setContentDescription("Mức zoom");
+    seek.setOnSeekBarChangeListener(
+        new SeekBar.OnSeekBarChangeListener() {
+          public void onStartTrackingTouch(SeekBar b) {}
+
+          public void onStopTrackingTouch(SeekBar b) {}
+
+          public void onProgressChanged(SeekBar b, int progress, boolean user) {
+            if (user && camera != null) {
+              camera.setZoom(min + (max - min) * progress / 1000f);
+              value.setText(zoomText(camera.zoom()));
+            }
           }
         });
-    return box;
+    panel.addView(seek, new LinearLayout.LayoutParams(-1, dp(56)));
+    paragraph(
+        panel,
+        "Phạm vi "
+            + zoomText(min)
+            + " – "
+            + zoomText(max)
+            + " do camera cung cấp. Chụm hai ngón trên khung ngắm để zoom nhanh. Zoom số lớn có thể"
+            + " giảm độ nét.");
+    TextView exposureValue = text("Bù sáng · " + camera.exposure(), 15, palette.ink);
+    exposureValue.setPadding(0, dp(12), 0, 0);
+    panel.addView(exposureValue);
+    int low = camera.minExposure(), high = camera.maxExposure();
+    SeekBar exposure = new SeekBar(this);
+    exposure.setContentDescription("Bù sáng");
+    exposure.setMax(high - low);
+    exposure.setProgress(camera.exposure() - low);
+    exposure.setEnabled(high > low);
+    exposure.setOnSeekBarChangeListener(
+        new SeekBar.OnSeekBarChangeListener() {
+          public void onStartTrackingTouch(SeekBar b) {}
+
+          public void onStopTrackingTouch(SeekBar b) {}
+
+          public void onProgressChanged(SeekBar b, int position, boolean user) {
+            if (user && camera != null) {
+              camera.setExposure(low + position);
+              exposureValue.setText("Bù sáng · " + camera.exposure());
+              prefs.edit().putInt("exposure", camera.exposure()).apply();
+            }
+          }
+        });
+    panel.addView(exposure, new LinearLayout.LayoutParams(-1, dp(56)));
+    if (high == low) paragraph(panel, "Camera này không hỗ trợ bù sáng.");
+    showAlert(
+        new AlertDialog.Builder(this)
+            .setTitle("Thu phóng và độ sáng")
+            .setView(panel)
+            .setPositiveButton("Xong", null));
   }
 
-  private View cameraAction(String icon, String label, Runnable action) {
-    FrameLayout box = whiteAction(icon, label, action);
-    box.setLayoutParams(new LinearLayout.LayoutParams(0, dp(48), 1));
-    return box;
+  private void beginRecording() {
+    if (busy || camera == null || !camera.isReady()) {
+      message("Chờ camera sẵn sàng rồi quay.");
+      return;
+    }
+    if (videoAudio
+        && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+      recordAfterPermission = true;
+      requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 13);
+      return;
+    }
+    busy = true;
+    videoStarting = true;
+    if (shutterButton != null) shutterButton.state(true, true);
+    message("Đang chuẩn bị quay…");
+    camera.startVideo(videos, videoAudio);
+  }
+
+  private void stopRecording() {
+    if (camera != null && camera.isRecording()) {
+      message("Đang lưu video…");
+      camera.stopVideo();
+    }
+  }
+
+  private void toggleVideoPause() {
+    if (!recordingVideo || camera == null) return;
+    videoPaused = !videoPaused;
+    camera.pauseVideo(videoPaused);
+    if (videoPaused) pauseStarted = SystemClock.elapsedRealtime();
+    else pausedDuration += SystemClock.elapsedRealtime() - pauseStarted;
+    pauseRecording.setText(videoPaused ? "Tiếp tục" : "Tạm dừng");
   }
 
   private void updateCameraActions() {
     for (String icon : new String[] {"flash", "timer", "grid"}) {
-      FrameLayout existing = body.findViewWithTag("camera-" + icon);
-      if (existing == null) continue;
+      View found = body.findViewWithTag("camera-" + icon);
+      if (!(found instanceof LinearLayout)) continue;
+      LinearLayout item = (LinearLayout) found;
+      boolean active = icon.equals("flash") ? flash : icon.equals("timer") ? timer > 0 : grid;
       String label =
           icon.equals("flash")
               ? (flash ? "Flash bật" : "Flash tắt")
               : icon.equals("timer")
                   ? (timer == 0 ? "Hẹn giờ" : timer + " giây")
                   : (grid ? "Lưới bật" : "Lưới tắt");
-      FrameLayout fresh = whiteAction(icon, label, () -> {});
-      existing.removeAllViews();
-      existing.setContentDescription(label);
-      while (fresh.getChildCount() > 0) {
-        View child = fresh.getChildAt(0);
-        fresh.removeViewAt(0);
-        existing.addView(child);
+      item.setContentDescription(label);
+      item.setSelected(active);
+      item.removeViewAt(0);
+      item.addView(
+          new IconView(this, icon, active ? 0xffffd45c : Color.WHITE),
+          0,
+          new LinearLayout.LayoutParams(dp(23), dp(23)));
+      ((TextView) item.getChildAt(1))
+          .setText(
+              icon.equals("timer")
+                  ? (timer > 0 ? timer + " giây" : "Hẹn giờ")
+                  : icon.equals("flash") ? (flash ? "Flash bật" : "Flash") : "Lưới");
+      ((TextView) item.getChildAt(1)).setTextColor(active ? 0xffffd45c : Color.WHITE);
+      if (videoMode && !icon.equals("grid")) {
+        item.setEnabled(false);
+        item.setAlpha(.4f);
       }
     }
   }
@@ -765,52 +1017,6 @@ public final class MainActivity extends Activity {
     }
   }
 
-  private void populateStrip() {
-    if (presetRow == null) return;
-    presetRow.removeAllViews();
-    int from = Math.max(0, (styleId / 6) * 6);
-    for (int i = from; i < Math.min(from + 6, Presets.ALL.size()); i++) {
-      Presets.Style style = Presets.get(i);
-      LinearLayout tile = new LinearLayout(this);
-      tile.setOrientation(LinearLayout.VERTICAL);
-      tile.setGravity(Gravity.CENTER);
-      tile.setBackground(ripple(style.id == styleId ? palette.line : palette.surface, 10));
-      if (sample != null) {
-        ImageView image = new ImageView(this);
-        image.setImageBitmap(sample);
-        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        image.setColorFilter(
-            new ColorMatrixColorFilter(new ColorMatrix(Presets.matrix(style, strength))));
-        tile.addView(image, new LinearLayout.LayoutParams(dp(68), dp(30)));
-      } else {
-        View swatch = new View(this);
-        swatch.setBackground(
-            new GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[] {swatch(style), palette.surface}));
-        tile.addView(swatch, new LinearLayout.LayoutParams(dp(68), dp(24)));
-      }
-      TextView title = text(style.name, 11, palette.ink);
-      title.setGravity(Gravity.CENTER);
-      title.setMaxLines(1);
-      title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-      tile.addView(title, new LinearLayout.LayoutParams(-1, dp(24)));
-      tile.setContentDescription(style.name + (styleId == style.id ? ", đang chọn" : ""));
-      tile.setOnClickListener(
-          v -> {
-            if (!busy) {
-              styleId = style.id;
-              remember();
-              applyLive();
-              populateStrip();
-            }
-          });
-      LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(84), dp(60));
-      p.rightMargin = dp(8);
-      presetRow.addView(tile, p);
-    }
-  }
-
   private int swatch(Presets.Style style) {
     float[] m = Presets.matrix(style, 1);
     return Color.rgb(
@@ -824,79 +1030,40 @@ public final class MainActivity extends Activity {
 
   private void showAlert(AlertDialog.Builder builder) {
     AlertDialog dialog = builder.create();
-    dialog.show();
     controlsDialog = dialog;
-    if (sakuga != null) sakuga.onPause();
-    ViewGroup decor = (ViewGroup) dialog.getWindow().getDecorView();
-    SakugaTabsLayer controls = new SakugaTabsLayer(this, (mode, value, index) -> {});
-    dialogLayer = controls;
-    decor.addView(controls, new ViewGroup.LayoutParams(-1, -1));
-    controls.target(null, "none", 0, palette, decor);
-    dialog.setOnDismissListener(
-        ignored -> {
-          controls.release();
-          dialogLayer = null;
-          controlsDialog = null;
-          if (sakuga != null) sakuga.onResume();
-        });
+    dialog.setOnDismissListener(ignored -> controlsDialog = null);
+    dialog.show();
   }
 
   private void showStrength() {
-    if (busy) return;
-    if (sakuga != null) sakuga.onPause();
-    Dialog dialog = new Dialog(this);
-    controlsDialog = dialog;
+    if (busy || videoMode) return;
     LinearLayout panel = new LinearLayout(this);
     panel.setOrientation(LinearLayout.VERTICAL);
-    panel.setPadding(dp(18), dp(20), dp(18), dp(24));
-    panel.setBackground(round(palette.background, 16));
-    TextView heading = text(Presets.get(styleId).name, 22, palette.ink);
-    panel.addView(heading);
-    TextView help = text("Kéo để chỉnh màu. 0% giữ màu gốc.", 13, palette.muted);
-    help.setPadding(0, dp(8), 0, dp(8));
-    panel.addView(help);
+    panel.setPadding(dp(20), dp(8), dp(20), dp(12));
     panel.addView(strengthControl());
     toggle(
         panel,
         "So sánh màu gốc",
-        "Tạm bỏ màu để so sánh; ảnh lưu vẫn dùng style đã chọn.",
+        "Ảnh lưu dùng màu đã chọn.",
         false,
         value -> {
           comparing = value;
           applyLive();
         });
-    FrameLayout helpButton =
-        iconButton(
-            "settings",
-            "Màu xem trực tiếp và ảnh lưu dùng cùng công thức. Hạt film và tối góc được thêm khi"
-                + " lưu.",
-            () -> {},
-            false);
-    helpButton.setTag("sakuga-tooltip");
-    panel.addView(helpButton, new LinearLayout.LayoutParams(-1, dp(60)));
-    panel.addView(button("Xong", dialog::dismiss, true), new LinearLayout.LayoutParams(-1, dp(58)));
-    FrameLayout frame = new FrameLayout(this);
-    frame.addView(panel, new FrameLayout.LayoutParams(-1, -2));
-    SakugaTabsLayer controls = new SakugaTabsLayer(this, (m, v, i) -> {});
-    dialogLayer = controls;
-    frame.addView(controls, new FrameLayout.LayoutParams(-1, -1));
-    dialog.setContentView(frame);
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle(Presets.get(styleId).name)
+            .setView(panel)
+            .setPositiveButton("Xong", null)
+            .create();
+    controlsDialog = dialog;
     dialog.setOnDismissListener(
         d -> {
           comparing = false;
           applyLive();
-          controls.release();
-          dialogLayer = null;
           controlsDialog = null;
-          if (sakuga != null) {
-            sakuga.onResume();
-            sakuga.synchronizeSelection(1);
-          }
         });
     dialog.show();
-    dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
-    dialog.getWindow().setLayout(getResources().getDisplayMetrics().widthPixels - dp(24), -2);
-    controls.target(null, "none", 0, palette, panel);
   }
 
   private void progress(int value) {
@@ -912,7 +1079,7 @@ public final class MainActivity extends Activity {
                   if (token == progressEpoch && processingProgress != null)
                     processingProgress.setVisibility(View.GONE);
                 },
-                10000);
+                600);
         });
   }
 
@@ -945,20 +1112,21 @@ public final class MainActivity extends Activity {
 
           public void onStopTrackingTouch(SeekBar s) {
             remember();
-            populateStrip();
           }
         });
     return line;
   }
 
   private void applyLive() {
-    if (styleTitle != null) styleTitle.setText("ẢNH");
     if (presetName != null)
       presetName.setText(
-          comparing
-              ? "Đang so sánh · Màu gốc"
-              : Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%");
-    if (camera != null) camera.color(Presets.get(styleId), comparing ? 0 : strength);
+          videoMode
+              ? "MP4 · 30 fps"
+              : comparing
+                  ? "Đang so sánh · Màu gốc"
+                  : Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%");
+    if (camera != null)
+      camera.color(Presets.get(videoMode ? 0 : styleId), videoMode || comparing ? 0 : strength);
     if (editor && editSource != null) {
       ImageView image = body.findViewWithTag("editorImage");
       if (image != null)
@@ -976,10 +1144,11 @@ public final class MainActivity extends Activity {
     }
     busy = true;
     pending = snapshot("camera");
-    tick(timer);
+    tick(timer, captureCountdown.begin());
   }
 
-  private void tick(int remaining) {
+  private void tick(int remaining, int token) {
+    if (!captureCountdown.accepts(token)) return;
     if (!resumed || pending == null) {
       busy = false;
       return;
@@ -992,7 +1161,7 @@ public final class MainActivity extends Activity {
     }
     countdown.setText(String.valueOf(remaining));
     countdown.setVisibility(View.VISIBLE);
-    main.postDelayed(() -> tick(remaining - 1), 1000);
+    main.postDelayed(() -> tick(remaining - 1, token), 1000);
   }
 
   private static final class CaptureSettings {
@@ -1077,8 +1246,7 @@ public final class MainActivity extends Activity {
                     tab = 2;
                     render();
                   }
-                  if (sakuga != null) sakuga.success("Chụp ảnh ngay");
-                  if (savedEdit) message("Đã lưu ảnh vào album Ed-Cam.");
+                  message("Đã lưu ảnh vào album Ed-Cam.");
                 });
           } catch (Exception | OutOfMemoryError e) {
             progress(-1);
@@ -1388,19 +1556,27 @@ public final class MainActivity extends Activity {
     TextView loading = text("Đang đọc album…", 14, palette.muted);
     list.addView(loading);
     long token = uiGeneration;
+    final String selectedDay = albumDay;
+    final boolean withLocation = albumWithLocation;
     worker.execute(
         () -> {
           try {
             List<PhotoStore.Photo> photos = store.list();
+            List<File> clips = videos.list();
+            clips.removeIf(
+                file ->
+                    withLocation
+                        || (!selectedDay.isEmpty()
+                            && !date(file.lastModified(), "yyyy-MM-dd").equals(selectedDay)));
             photos.removeIf(
                 photo ->
-                    (!albumDay.isEmpty() && !date(photo.time, "yyyy-MM-dd").equals(albumDay))
-                        || (albumWithLocation && Double.isNaN(photo.lat)));
+                    (!selectedDay.isEmpty() && !date(photo.time, "yyyy-MM-dd").equals(selectedDay))
+                        || (withLocation && Double.isNaN(photo.lat)));
             main.post(
                 () -> {
                   if (token != uiGeneration || destroyed) return;
                   list.removeAllViews();
-                  if (photos.isEmpty()) {
+                  if (photos.isEmpty() && clips.isEmpty()) {
                     empty(
                         list,
                         "Chưa có ảnh phù hợp",
@@ -1415,9 +1591,25 @@ public final class MainActivity extends Activity {
                             true));
                     return;
                   }
-                  TextView count = text(photos.size() + " ảnh · Mới nhất trước", 13, palette.muted);
+                  TextView count =
+                      text(photos.size() + " ảnh · " + clips.size() + " video", 13, palette.muted);
                   count.setPadding(0, dp(18), 0, dp(12));
                   list.addView(count);
+                  if (!clips.isEmpty()) {
+                    section(list, "Video");
+                    for (File clip : clips.subList(0, Math.min(albumLimit, clips.size())))
+                      videoTile(list, clip, token);
+                    if (clips.size() > albumLimit)
+                      list.addView(
+                          button(
+                              "Xem thêm video",
+                              () -> {
+                                albumLimit += 40;
+                                render();
+                              },
+                              false));
+                  }
+                  if (!photos.isEmpty()) section(list, "Ảnh");
                   int shown = Math.min(albumLimit, photos.size());
                   for (int i = 0; i < shown; i += 2) {
                     LinearLayout row = row();
@@ -1447,6 +1639,171 @@ public final class MainActivity extends Activity {
                 });
           }
         });
+  }
+
+  private void videoTile(LinearLayout list, File clip, long token) {
+    LinearLayout row = row();
+    row.setPadding(0, dp(8), 0, dp(8));
+    ImageView thumbnail = new ImageView(this);
+    thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    thumbnail.setBackground(round(palette.line, 8));
+    row.addView(thumbnail, new LinearLayout.LayoutParams(dp(88), dp(76)));
+    LinearLayout words = new LinearLayout(this);
+    words.setOrientation(LinearLayout.VERTICAL);
+    words.setPadding(dp(14), 0, 0, 0);
+    words.addView(text("Video · " + date(clip.lastModified(), "dd/MM · HH:mm"), 15, palette.ink));
+    TextView duration =
+        text(
+            String.format(Locale.US, "MP4 · %.1f MB", clip.length() / 1048576f), 13, palette.muted);
+    duration.setPadding(0, dp(6), 0, 0);
+    words.addView(duration);
+    row.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+    row.setBackground(ripple(Color.TRANSPARENT, 8));
+    row.setContentDescription("Xem video " + date(clip.lastModified(), "dd/MM HH:mm"));
+    row.setOnClickListener(v -> openVideo(clip));
+    list.addView(row);
+    worker.execute(
+        () -> {
+          if (token != uiGeneration || destroyed) return;
+          Bitmap bitmap = null;
+          long milliseconds = 0;
+          try (android.media.MediaMetadataRetriever retriever =
+              new android.media.MediaMetadataRetriever()) {
+            retriever.setDataSource(clip.getPath());
+            bitmap =
+                retriever.getScaledFrameAtTime(
+                    0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 176, 144);
+            String value =
+                retriever.extractMetadata(
+                    android.media.MediaMetadataRetriever.METADATA_KEY_DURATION);
+            milliseconds = value == null ? 0 : Long.parseLong(value);
+          } catch (IOException | RuntimeException e) {
+            android.util.Log.w("EdCamVideo", "Cannot read video thumbnail", e);
+          }
+          Bitmap frame = bitmap;
+          long seconds = milliseconds / 1000;
+          main.post(
+              () -> {
+                if (token != uiGeneration || destroyed) {
+                  if (frame != null) frame.recycle();
+                  return;
+                }
+                thumbnail.setImageBitmap(frame);
+                duration.setText(
+                    String.format(
+                        Locale.US,
+                        "%02d:%02d · %.1f MB",
+                        seconds / 60,
+                        seconds % 60,
+                        clip.length() / 1048576f));
+              });
+        });
+  }
+
+  private void openVideo(File clip) {
+    if (busy) return;
+    Dialog dialog = new Dialog(this);
+    controlsDialog = dialog;
+    LinearLayout panel = new LinearLayout(this);
+    panel.setOrientation(LinearLayout.VERTICAL);
+    panel.setBackgroundColor(palette.background);
+    panel.setPadding(dp(16), dp(12), dp(16), dp(12));
+    panel.addView(text("Video của bạn", 20, palette.ink));
+    VideoView player = new VideoView(this);
+    FrameLayout videoFrame = new FrameLayout(this);
+    videoFrame.setBackgroundColor(Color.BLACK);
+    videoFrame.addView(player, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+    panel.addView(videoFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+    MediaController media = new MediaController(this);
+    media.setAnchorView(videoFrame);
+    player.setMediaController(media);
+    player.setVideoPath(clip.getPath());
+    player.setOnPreparedListener(
+        mp -> {
+          player.start();
+          media.show(3000);
+        });
+    player.setOnErrorListener(
+        (mp, what, extra) -> {
+          message("Không phát được video này.");
+          return true;
+        });
+    panel.addView(
+        button(
+            "Lưu video vào thư viện máy",
+            () -> {
+              if (busy) return;
+              busy = true;
+              worker.execute(
+                  () -> {
+                    String result;
+                    try {
+                      videos.export(clip);
+                      result = "Đã lưu video vào Movies/Ed-Cam.";
+                    } catch (IOException | RuntimeException e) {
+                      result = "Không xuất được video. Kiểm tra dung lượng trống.";
+                    }
+                    String feedback = result;
+                    main.post(
+                        () -> {
+                          busy = false;
+                          if (!destroyed) {
+                            dialog.dismiss();
+                            message(feedback);
+                          }
+                        });
+                  });
+            },
+            true),
+        new LinearLayout.LayoutParams(-1, -2));
+    panel.addView(
+        button(
+            "Xóa video",
+            () -> {
+              if (busy) return;
+              new AlertDialog.Builder(this)
+                  .setTitle("Xóa video khỏi Ed-Cam?")
+                  .setMessage("Bản đã xuất ra thư viện máy vẫn được giữ.")
+                  .setNegativeButton("Giữ lại", null)
+                  .setPositiveButton(
+                      "Xóa video",
+                      (d, w) -> {
+                        busy = true;
+                        player.stopPlayback();
+                        worker.execute(
+                            () -> {
+                              String result;
+                              try {
+                                java.nio.file.Files.deleteIfExists(clip.toPath());
+                                result = "Đã xóa video.";
+                              } catch (IOException e) {
+                                result = "Không xóa được video.";
+                              }
+                              String feedback = result;
+                              main.post(
+                                  () -> {
+                                    busy = false;
+                                    if (!destroyed) {
+                                      dialog.dismiss();
+                                      render();
+                                      message(feedback);
+                                    }
+                                  });
+                            });
+                      })
+                  .show();
+            },
+            false));
+    panel.addView(button("Đóng", dialog::dismiss, false));
+    dialog.setContentView(panel);
+    dialog.setOnDismissListener(
+        d -> {
+          player.stopPlayback();
+          controlsDialog = null;
+        });
+    dialog.show();
+    dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+    dialog.getWindow().setLayout(-1, -1);
   }
 
   private void albumTile(LinearLayout row, PhotoStore.Photo photo, long token) {
@@ -1506,15 +1863,18 @@ public final class MainActivity extends Activity {
               });
         });
     title(page, photo.style, date(photo.time, "dd MMMM yyyy · HH:mm"));
-    RatingBar rating = new RatingBar(this, null, android.R.attr.ratingBarStyleSmall);
+    RatingBar rating = new RatingBar(this, null, android.R.attr.ratingBarStyle);
     rating.setNumStars(5);
     rating.setStepSize(1);
     rating.setIsIndicator(false);
     rating.setRating(prefs.getInt("rating-" + photo.id, 0));
+    rating.setProgressTintList(ColorStateList.valueOf(palette.accent));
+    rating.setSecondaryProgressTintList(ColorStateList.valueOf(palette.muted));
+    rating.setProgressBackgroundTintList(ColorStateList.valueOf(palette.muted));
     rating.setContentDescription("Đánh dấu ảnh cá nhân từ 0 đến 5 sao");
     rating.setOnRatingBarChangeListener(
         (bar, value, user) -> prefs.edit().putInt("rating-" + photo.id, Math.round(value)).apply());
-    page.addView(rating, new LinearLayout.LayoutParams(-1, dp(60)));
+    page.addView(rating, new LinearLayout.LayoutParams(-2, dp(56)));
     page.addView(
         text(
             photo.width
@@ -1614,10 +1974,12 @@ public final class MainActivity extends Activity {
         () -> {
           try {
             store.delete(photo);
+            thumbnails.remove(photo.image.getPath());
             main.post(
                 () -> {
                   busy = false;
                   if (!destroyed) {
+                    prefs.edit().remove("rating-" + photo.id).apply();
                     detail = null;
                     render();
                     message("Đã xóa khỏi album Ed-Cam.");
@@ -1800,24 +2162,34 @@ public final class MainActivity extends Activity {
     LinearLayout page = page(scroll);
     title(page, "Theo cách của bạn", "Giao diện, dấu ảnh và quyền riêng tư.");
     section(page, "Giao diện");
-    RadioGroup themes = new RadioGroup(this);
-    themes.setContentDescription("Chọn giao diện");
-    for (int i = 0; i < Palette.ALL.length; i++) {
-      RadioButton option = new RadioButton(this);
-      option.setId(1000 + i);
-      option.setText(Palette.ALL[i].name);
-      option.setMinHeight(dp(60));
-      themes.addView(option, new RadioGroup.LayoutParams(-1, dp(60)));
-    }
-    themes.check(1000 + themeId);
-    themes.setOnCheckedChangeListener(
-        (group, id) -> {
-          if (id >= 1000 && id < 1000 + Palette.ALL.length && themeId != id - 1000) {
-            themeId = id - 1000;
-            render();
-          }
+    Button theme = button("Giao diện · " + Palette.ALL[themeId].name, this::themeDialog, false);
+    theme.setContentDescription("Chọn giao diện");
+    theme.setBackground(ripple(palette.surface, 12));
+    page.addView(theme, new LinearLayout.LayoutParams(-1, -2));
+    section(page, "Khung ngắm");
+    toggle(
+        page,
+        "Lưới bố cục",
+        "Hiển thị lưới một phần ba để căn ảnh.",
+        grid,
+        value -> {
+          grid = value;
+          remember();
         });
-    page.addView(themes, new LinearLayout.LayoutParams(-1, dp(300)));
+    section(page, "Video");
+    toggle(
+        page,
+        "Ghi âm khi quay",
+        "Chỉ xin quyền micro khi bạn bắt đầu quay có âm thanh.",
+        videoAudio,
+        value -> {
+          videoAudio = value;
+          remember();
+        });
+    paragraph(
+        page,
+        "Video MP4/H.264, tối đa Full HD 30 fps theo camera. Video được giữ trong album riêng; có"
+            + " thể xem, xuất hoặc xóa. Video dùng màu gốc, không áp preset ảnh.");
     section(page, "Khi lưu ảnh");
     toggle(
         page,
@@ -1883,12 +2255,12 @@ public final class MainActivity extends Activity {
             + " Internet.");
     paragraph(
         page,
-        "Ảnh trong album sẽ mất khi gỡ ứng dụng hoặc xóa dữ liệu app. Dùng nút lưu vào thư viện máy"
-            + " để giữ bản sao riêng. Tắt vị trí chỉ áp dụng cho ảnh chụp tiếp theo.");
+        "Ảnh và video trong album sẽ mất khi gỡ ứng dụng hoặc xóa dữ liệu app. Dùng nút lưu vào thư"
+            + " viện máy để giữ bản sao riêng. Tắt vị trí chỉ áp dụng cho ảnh chụp tiếp theo.");
     section(page, "Về Ed-Cam");
     paragraph(
         page,
-        "Phiên bản 1.2.0 · 180 preset màu · 5 giao diện\n"
+        "Phiên bản 1.3.0 · 180 preset màu · 5 giao diện\n"
             + "Ảnh đầu ra tối đa 2560 px ở cạnh dài. Màu hiển thị trực tiếp; hạt film và tối góc"
             + " được thêm khi lưu. Chất ảnh phụ thuộc camera và ánh sáng.");
   }
@@ -1900,7 +2272,7 @@ public final class MainActivity extends Activity {
   private void toggle(
       LinearLayout page, String name, String description, boolean checked, ToggleAction action) {
     LinearLayout row = row();
-    row.setPadding(0, dp(10), 0, dp(10));
+    row.setPadding(0, dp(14), 0, dp(14));
     LinearLayout words = new LinearLayout(this);
     words.setOrientation(LinearLayout.VERTICAL);
     words.addView(text(name, 16, palette.ink));
@@ -1911,7 +2283,7 @@ public final class MainActivity extends Activity {
     Switch toggle = new Switch(this);
     toggle.setChecked(checked);
     toggle.setContentDescription(name);
-    toggle.setMinimumWidth(dp(78));
+    toggle.setMinimumWidth(dp(56));
     toggle.setMinimumHeight(dp(48));
     toggle.setThumbTintList(
         new ColorStateList(
@@ -1923,33 +2295,26 @@ public final class MainActivity extends Activity {
   }
 
   private void themeDialog() {
-    if (editor || detail != null) {
-      // Keep an in-progress edit intact. The radio picker is local to this dialog.
-      RadioGroup options = new RadioGroup(this);
-      for (int i = 0; i < Palette.ALL.length; i++) {
-        RadioButton option = new RadioButton(this);
-        option.setId(2000 + i);
-        option.setText(Palette.ALL[i].name);
-        options.addView(option, new RadioGroup.LayoutParams(-1, dp(56)));
-      }
-      options.check(2000 + themeId);
-      int[] selection = {themeId};
-      options.setOnCheckedChangeListener((group, id) -> selection[0] = id - 2000);
-      showAlert(
-          new AlertDialog.Builder(this)
-              .setTitle("Giao diện Ed-Cam")
-              .setView(options)
-              .setPositiveButton(
-                  "Áp dụng",
-                  (dialog, which) -> {
-                    themeId = selection[0];
-                    render();
-                  })
-              .setNegativeButton("Đóng", null));
-      return;
-    }
-    tab = 3;
-    render();
+    if (busy) return;
+    String[] names = new String[Palette.ALL.length];
+    for (int i = 0; i < names.length; i++) names[i] = Palette.ALL[i].name;
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("Giao diện")
+            .setSingleChoiceItems(
+                names,
+                themeId,
+                (picker, index) -> {
+                  themeId = index;
+                  remember();
+                  picker.dismiss();
+                  render();
+                })
+            .setNegativeButton("Đóng", null)
+            .create();
+    controlsDialog = dialog;
+    dialog.setOnDismissListener(d -> controlsDialog = null);
+    dialog.show();
   }
 
   private boolean freshLocation() {
@@ -2048,6 +2413,25 @@ public final class MainActivity extends Activity {
   @Override
   public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
     super.onRequestPermissionsResult(request, permissions, grants);
+    if (request == 13) {
+      if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+          == PackageManager.PERMISSION_GRANTED) {
+        recordAfterPermission = true;
+        if (resumed && videoMode && tab == 0 && camera != null && camera.isReady()) {
+          recordAfterPermission = false;
+          beginRecording();
+        }
+      } else {
+        recordAfterPermission = false;
+        videoAudio = false;
+        remember();
+        if (tab == 0) render();
+        message(
+            "Chưa có quyền micro. Bạn có thể quay video không âm thanh hoặc cấp quyền trong cài đặt"
+                + " máy.");
+      }
+      return;
+    }
     if (request == CAMERA_PERMISSION) {
       if (camera != null
           && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -2230,12 +2614,11 @@ public final class MainActivity extends Activity {
 
   private void message(String message) {
     if (destroyed || notice == null) return;
-    if (sakuga != null && !sakuga.unavailable()) sakuga.toast(message);
     notice.setText(message);
-    notice.setVisibility(sakuga != null && !sakuga.unavailable() ? View.GONE : View.VISIBLE);
+    notice.setVisibility(View.VISIBLE);
     notice.bringToFront();
     notice.removeCallbacks(hideNotice);
-    notice.postDelayed(hideNotice, 5500);
+    notice.postDelayed(hideNotice, 2500);
   }
 
   private final Runnable hideNotice =
