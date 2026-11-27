@@ -1,0 +1,20 @@
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#6554A4</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+    <style name="NightTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#CDC0F4</item>
+        <item name="android:windowBackground">#191922</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+    <style name="ModernTheme" parent="AppTheme"><item name="android:colorAccent">#2756BD</item></style>
+    <style name="RoseTheme" parent="AppTheme"><item name="android:colorAccent">#A3355F</item></style>
+    <style name="SageTheme" parent="AppTheme"><item name="android:colorAccent">#356449</item></style>
+</resources>

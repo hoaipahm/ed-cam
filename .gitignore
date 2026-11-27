@@ -1,0 +1,7 @@
+.tools/
+.gradle/
+local.properties
+**/build/
+*.keystore
+qa/*.png
+qa/*.xml

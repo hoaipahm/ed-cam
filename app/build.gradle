@@ -1,0 +1,17 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.edcam'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+    defaultConfig {
+        applicationId 'com.edcam'
+        minSdk 29
+        targetSdk 35
+        versionCode 4
+        versionName '1.1.0'
+        testInstrumentationRunner project.hasProperty('performance') ? 'com.edcam.PerformanceInstrumentation' : 'com.edcam.PixelInstrumentation'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildTypes { release { minifyEnabled false } }
+    lint { abortOnError true }
+}

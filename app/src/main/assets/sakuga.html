@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'none'">
+  <title>Ed-Cam · Sakuga Tabs</title>
+  <link rel="stylesheet" href="sakuga-host.css">
+  <script src="tabs.js"></script>
+  <script src="sakuga-host.js" defer></script>
+</head>
+<body>
+  <main id="browser-preview" hidden>
+    <p class="demo-label">Ed-Cam · Trang kiểm tra component</p>
+    <section data-panel="camera"><h1>Camera</h1><p>Trong APK, vùng này là camera Android native.</p></section>
+    <section data-panel="styles" hidden><h1>Bộ màu</h1><p>Tab đã chọn bộ màu. Trong APK, listener mở thư viện native.</p></section>
+    <section data-panel="album" hidden><h1>Album</h1><p>Tab đã chọn album cá nhân.</p></section>
+    <section data-panel="settings" hidden><h1>Cài đặt</h1><p>Tab đã chọn giao diện và tùy chọn riêng tư.</p></section>
+    <section data-panel="color" hidden><h1>Cường độ màu</h1><p>Trong APK, listener mở hộp chỉnh cường độ.</p></section>
+    <button id="demo-mode" type="button">Thử hàng tab camera</button>
+  </main>
+  <form id="primary-host" class="tab-host" aria-label="Điều hướng Ed-Cam">
+    <sakuga-tabs id="primary-tabs" label="Điều hướng Ed-Cam">
+      <option value="camera">Chụp</option><option value="styles">Style</option><option value="album">Album</option><option value="settings">Cài đặt</option>
+    </sakuga-tabs>
+    <input type="hidden" name="screen" value="camera">
+  </form>
+  <form id="camera-host" class="tab-host inactive" aria-label="Chế độ camera">
+    <sakuga-tabs id="camera-tabs" label="Chế độ camera" selected="1">
+      <option value="styles">STYLE</option><option value="camera">ẢNH</option><option value="color">MÀU</option>
+    </sakuga-tabs>
+    <input type="hidden" name="screen" value="camera">
+  </form>
+</body>
+</html>

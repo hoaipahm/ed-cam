@@ -1,0 +1,22 @@
+:root {
+  --sk-card: #fffdf8; --sk-ink: #292440; --sk-dim: #777087;
+  --sk-soft: #d1c5ef; --sk-pri: #b6a6ed; --sk-pri-ink: #292440;
+  --sk-acc: #ec83ad; --sk-track: #e5ddf3; --sk-bw: 2.4px;
+  --sk-sh: 3px 4px 0 var(--sk-soft);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; background: transparent; overflow: hidden; font-family: system-ui, sans-serif; }
+body { pointer-events: none; }
+.tab-host { position: fixed; visibility: hidden; margin: 0; display: flex; justify-content: center; align-items: center; pointer-events: auto; z-index: 2; }
+.tab-host.inactive { visibility: hidden; pointer-events: none; }
+sakuga-tabs { width: calc(100% - 28px); margin-top: 0; }
+sakuga-tabs::part(tabs) { width: 100%; }
+sakuga-tabs::part(tab) { flex: 1 1 0; min-width: 0; min-height: 48px; padding: 10px 4px; font-size: 14px; }
+#browser-preview { color: #292440; padding: 48px 24px; max-width: 720px; margin: auto; pointer-events: auto; }
+.demo-label { font-size: 13px; color: #716783; }
+#browser-preview h1 { font-size: 32px; margin: 24px 0 12px; }
+#browser-preview p { line-height: 1.6; }
+#demo-mode { border: 1px solid #9386b1; border-radius: 10px; color: #41345c; background: #f3edf9; padding: 12px 16px; cursor: pointer; }
+body.demo { background: #f7f4ed; min-height: 100vh; }
+body.demo .tab-host { left: max(0px, calc((100vw - 640px)/2)); width: min(100vw, 640px); bottom: 24px; height: 76px; }
+body.demo #camera-host { bottom: 112px; }

@@ -1,0 +1,81 @@
+const { chromium } = require('../.tools/browser/node_modules/playwright');
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const executablePath = process.env.CHROME;
+const url = 'http://127.0.0.1:8876/sakuga.html';
+
+(async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  const results = [];
+  try {
+    for (const width of [390, 1280]) {
+      const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: true });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.goto(url);
+      await page.waitForFunction(() => !!document.querySelector('#primary-tabs').tabs);
+      await page.evaluate(() => { window.changes = []; addEventListener('edcam:tab-change', e => changes.push(e.detail)); });
+      const client = await context.newCDPSession(page);
+      const button = i => page.locator('#primary-tabs').locator('button[role=tab]').nth(i);
+      const box = await button(1).boundingBox();
+      const x = box.x + box.width / 2, y = box.y + box.height / 2;
+      await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+      await page.waitForFunction(() => document.querySelector('#primary-tabs').value === 'styles');
+      assert(await page.locator('[data-panel=styles]').isVisible());
+      await page.waitForTimeout(1100);
+      const touch = await button(2).boundingBox();
+      await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touch.x + touch.width / 2, y: touch.y + touch.height / 2 }] });
+      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForFunction(() => document.querySelector('#primary-tabs').value === 'album');
+      assert(await page.locator('[data-panel=album]').isVisible());
+      assert.equal(await page.evaluate(() => new FormData(document.querySelector('#primary-host')).get('screen')), 'album');
+      const payload = await page.evaluate(() => window.changes.at(-1));
+      assert.deepEqual(payload, { index: 2, value: 'album', label: 'Album' });
+      await page.waitForTimeout(1100);
+      // A cross-tab drag is real input; it must leave the panel consistent with the selected value.
+      const dragFrom = await button(2).boundingBox();
+      const dragTo = await button(0).boundingBox();
+      await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: dragFrom.x + 10, y: dragFrom.y + 20 }] });
+      await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: dragTo.x + 10, y: dragTo.y + 20 }] });
+      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(1100);
+      const dragValue = await page.evaluate(() => document.querySelector('#primary-tabs').value);
+      assert(await page.locator(`[data-panel=${dragValue}]`).isVisible());
+      const geometry = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth, canvas: !!document.querySelector('canvas.sakuga-fx'), buttons: [...document.querySelector('#primary-tabs').shadowRoot.querySelectorAll('button')].map(b => ({ width: b.clientWidth, scroll: b.scrollWidth })) }));
+      assert(geometry.scroll <= geometry.width + 1, 'No sideways page scroll');
+      assert(geometry.buttons.every(b => b.scroll <= b.width + 1), 'Labels fit tab widths');
+      assert(geometry.canvas, 'Effects use a full-page fixed canvas');
+      const count = await page.evaluate(() => changes.length);
+      await page.evaluate(() => { document.querySelector('#primary-tabs').selected = 3; });
+      assert.equal(await page.evaluate(() => changes.length), count, 'Quiet selected property has no change event');
+      assert.equal(await page.evaluate(() => new FormData(document.querySelector('#primary-host')).get('screen')), 'settings');
+      await page.reload();
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('ArrowRight');
+      await page.waitForFunction(() => document.querySelector('#primary-tabs').value === 'styles');
+      await page.keyboard.press('End');
+      await page.waitForFunction(() => document.querySelector('#primary-tabs').value === 'settings');
+      await page.keyboard.press('Home');
+      await page.waitForFunction(() => document.querySelector('#primary-tabs').value === 'camera');
+      await page.screenshot({ path: `qa/sakuga-browser-${width}.png` });
+      assert.equal(errors.length, 0, errors.join('\n'));
+      results.push({ width, mouse: 'pass', touch: 'pass', drag: 'pass', keyboard: 'pass', form: 'pass', quietSelection: 'pass', noOverflow: 'pass', errors });
+      await context.close();
+    }
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce', hasTouch: true });
+    const page = await context.newPage();
+    await page.goto(url);
+    await page.locator('#primary-tabs').locator('button[role=tab]').nth(1).tap();
+    await page.waitForTimeout(1000);
+    assert.equal(await page.evaluate(() => SakugaFX.calm), true);
+    assert.equal(await page.evaluate(() => document.querySelector('#primary-tabs').value), 'styles');
+    assert.equal(await page.locator('canvas.sakuga-fx').count(), 0, 'No effect canvas under reduced motion');
+    results.push({ reducedMotion: 'pass', stateChange: 'pass', noEffects: 'pass' });
+    fs.writeFileSync('qa/sakuga-browser-results.json', JSON.stringify(results, null, 2));
+    process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+    await context.close();
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });
