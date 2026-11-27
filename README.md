@@ -4,7 +4,7 @@
 
 <h1 align="center">Ed-Cam</h1>
 
-<p align="center">An offline Android photo and video camera with hardware-aware zoom, live photo presets and a private album.</p>
+<p align="center">An Android photo and video camera with local color processing, a private album and optional HTTPS photo sharing.</p>
 
 <p align="center">
   <img src="docs/images/java.svg" alt="Java 17">
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="delivery/Ed-Cam-1.3.0.apk">Download APK 1.3.0</a> ·
+  <a href="delivery/Ed-Cam-1.4.0.apk">Download APK 1.4.0</a> ·
   <a href="#technology">Technology</a> ?
   <a href="CHANGELOG.md">Changelog</a>
 </p>
@@ -23,6 +23,7 @@
 
 | Version | APK | Highlights |
 | --- | --- | --- |
+| 1.4.0 | [Download](delivery/Ed-Cam-1.4.0.apk) | Centered zoom tabs, flash modes, color video, three looks, alignment overlay and photo sharing |
 | 1.3.0 | [Download](delivery/Ed-Cam-1.3.0.apk) | Native controls, hardware-aware zoom, exposure, MP4 recording/playback and compact settings |
 | 1.2.2 | [Download](delivery/Ed-Cam-1.2.2.apk) | Darker camera controls, narrower mode tabs, and a prominent circular shutter |
 | 1.2.1 | [Download](delivery/Ed-Cam-1.2.1.apk) | Compact flash label, responsive star ratings, and a lower effects layer |
@@ -40,9 +41,11 @@ See [APK checksums](delivery/SHA256SUMS.txt) and the [changelog](CHANGELOG.md).
 - Apply 180 color presets with live preview, adjustable intensity, search, and favorites.
 - Use front and rear cameras, tap to focus, set a timer, and choose a capture aspect ratio. Flash depends on the selected camera's hardware.
 - Pinch to zoom, choose supported lens/zoom stops, and adjust zoom or exposure with native sliders. Ultrawide and high zoom values appear only when Camera2 exposes them; some manufacturers restrict auxiliary lenses in third-party apps.
-- Record MP4/H.264 video at up to 1080p/30 fps, with optional microphone audio, pause/resume, private playback, deletion and export to `Movies/Ed-Cam`. Video uses original camera colors; photo presets do not apply to video.
+- Record MP4/H.264 video at up to 1080p/30 fps, with optional microphone audio, pause/resume, private playback, deletion and export to `Movies/Ed-Cam`. The encoder applies the selected RGB color matrix and intensity. Photo grain, vignette and stamps remain still-image effects.
+- Swipe zoom tabs, hold and drag for fine zoom, or tap the center for exposure. Use a saved original to preview three looks, or align a new capture over an earlier picture.
+- Send a photo through Android Sharesheet, or create a revocable seven-day web link for viewing and color votes.
 - Import and edit images, keep originals, rate photos privately, and export to `Pictures/Ed-Cam`.
-- Choose among five interface themes and optionally add a date stamp or capture location. The app works without an account or internet access.
+- Choose among five interface themes and optionally add a date stamp or capture location. Capture and the album work offline. Web links require a configured Ed-Cam HTTPS service. See the [sharing setup](share/README.md).
 
 ## Technology
 
