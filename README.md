@@ -1,68 +1,57 @@
-# Ed-Cam
+﻿# Ed-Cam
 
-Ứng dụng camera cá nhân Android, giao diện tiếng Việt. Android 10 trở lên.
+Ed-Cam is an offline Android camera and photo editor for Android 10 and later. It offers live color presets, a private on-device album, and animated controls from the Sakuga VFX gallery.
 
-Bản mới: `delivery/Ed-Cam-1.2.0.apk`. Điều khiển Sakuga gốc cho nút chụp, nút thao tác, tab, công tắc, slider, ô nhập, checkbox, radio, sao, tiến độ, toast và trợ giúp; camera và xử lý ảnh vẫn native. Cách nối sự kiện nằm trong [docs/SAKUGA.md](docs/SAKUGA.md). Số đo và giới hạn hiệu năng nằm trong [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+**Latest build:** [Download Ed-Cam 1.2.2](delivery/Ed-Cam-1.2.2.apk)
 
-## Mới ở 1.2.0
+## Download
 
-- Thêm 120 màu đậm và dễ phân biệt: Duotone, Neon, Hoàng hôn, Băng giá, Nâu cổ, Pop Art, Hồng tím, Xanh điện ảnh, Đơn sắc, Thử nghiệm, Film đậm, Ánh sáng mới. 60 ID cũ được giữ nguyên để album và yêu thích không bị đổi tên style.
-- Công thức màu được tính sẵn; camera, thumbnail và ảnh xuất dùng chung phép biến đổi. Texture hạt film giới hạn 512×512 để giảm công việc và cấp phát cho ảnh lớn.
-- Hộp MÀU có slider Sakuga và so sánh màu gốc. Tên style/cường độ hiện trên khung ngắm. Có đánh dấu ảnh riêng từ 0 đến 5 sao.
-- Flash có chu trình AE precapture, kiểm tra phần cứng, fallback có giới hạn và khôi phục preview sau chụp/lỗi. **Chưa xác nhận đèn LED trên điện thoại thật.**
-- Git được khởi tạo với snapshot 1.1.0 trên `main`; thay đổi mới trên `feat/edcam-1.2`. Chưa cấu hình remote hay push.
+| Version | APK | Highlights |
+| --- | --- | --- |
+| 1.2.2 | [Download](delivery/Ed-Cam-1.2.2.apk) | Darker camera controls, narrower mode tabs, and a prominent circular shutter |
+| 1.2.1 | [Download](delivery/Ed-Cam-1.2.1.apk) | Compact flash label, responsive star ratings, and a lower effects layer |
+| 1.2.0 | [Download](delivery/Ed-Cam-1.2.0.apk) | 180 presets, expanded Sakuga controls, original-color comparison, and revised flash handling |
+| 1.1.0 | [Download](delivery/Ed-Cam-1.1.0.apk) | Original Sakuga tabs, rebuilt from the recorded source baseline |
+| 1.0.2 | [Download](delivery/Ed-Cam-1.0.2.apk) | Full-screen camera with a larger viewfinder |
+| 1.0.1 | [Download](delivery/Ed-Cam-1.0.1.apk) | Early camera build |
 
-Chi tiết kiểm tra: [docs/VERIFICATION-1.2.0.md](docs/VERIFICATION-1.2.0.md).
+These APKs are debug-signed builds for personal testing. Open the APK on your Android device and follow the installation prompt. To preserve your private album, install a newer APK over the existing app when the signing certificate matches. Export important photos to your device gallery before uninstalling or clearing app data.
 
-## Có gì trong bản này
+See [APK checksums](delivery/SHA256SUMS.txt) and the [changelog](CHANGELOG.md).
 
-- 180 preset màu thuộc 22 nhóm; tìm tên không dấu, lưu style yêu thích, chỉnh cường độ.
-- 5 giao diện lưu theo lựa chọn: Film kem, Đêm tối, Hiện đại, Hồng phấn, Xanh sage.
-- Camera trước/sau, màu xem trực tiếp, lấy nét bằng chạm, flash khi phần cứng hỗ trợ, hẹn giờ 3/10 giây, lưới, tỷ lệ 3:4 / 1:1 / 9:16.
-- Lưu album nội bộ, giữ nguyên bytes ảnh gốc nếu bật tùy chọn, nhập ảnh bằng trình chọn tệp của Android.
-- Chỉnh lại từ ảnh gốc, xuất bản chỉnh hoặc bản gốc vào `Pictures/Ed-Cam`.
-- In ngày giờ và tên địa điểm tự nhập; tọa độ/sai số GPS chỉ lưu khi bật quyền vị trí và có tín hiệu mới.
-- Lọc album theo ngày hoặc ảnh có tọa độ. Xóa có xác nhận.
-- Không tài khoản, không quảng cáo, không backend, không quyền Internet.
+## Features
 
-## Cài APK
+- Apply 180 color presets with live preview, adjustable intensity, search, and favorites.
+- Use front and rear cameras, tap to focus, set a timer, and choose a capture aspect ratio. Flash depends on the selected camera's hardware.
+- Import and edit images, keep originals, rate photos privately, and export to `Pictures/Ed-Cam`.
+- Choose among five interface themes and optionally add a date stamp or capture location. The app works without an account or internet access.
 
-Chép APK trong thư mục `delivery` sang điện thoại. Mở tệp APK và cho phép trình quản lý tệp cài ứng dụng khi Android yêu cầu. Mở Ed-Cam, chạm khung ngắm để cấp quyền camera. Vị trí không bắt buộc.
+## Build from source
 
-Ảnh trong album Ed-Cam nằm trong dữ liệu ứng dụng. Trước khi gỡ app hoặc xóa dữ liệu, xuất các ảnh cần giữ vào thư viện máy. Bản gốc nhập từ ngoài có thể còn thông tin EXIF, bao gồm vị trí.
+Install JDK 17, Android SDK Platform 35, and Android SDK Build Tools 35.0.0. Open the project in Android Studio or configure the SDK through `ANDROID_HOME` or a local `local.properties` file.
 
-## Build từ mã nguồn
-
-Yêu cầu JDK 17, Android SDK platform 35 và build-tools 35.0.0. Mở thư mục bằng Android Studio hoặc đặt `sdk.dir` trong `local.properties` (không đưa đường dẫn máy cá nhân vào Git).
+On Windows, run:
 
 ```powershell
 .\gradlew.bat :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
 .\qa\test-presets.ps1
 ```
 
-APK mặc định ở `app/build/outputs/apk/debug/app-debug.apk`. Bản debug có chữ ký dành cho thử nghiệm; phát hành lâu dài cần giữ khóa ký riêng, không thay khóa giữa các bản cập nhật.
+On macOS or Linux, run:
 
-Để chạy kiểm tra Android trên thiết bị thử nghiệm:
-
-```powershell
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb shell am instrument -w com.edcam.test/com.edcam.PixelInstrumentation
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
 ```
 
-Kiểm tra Android tạo một ảnh tổng hợp trong dữ liệu ứng dụng, kiểm tra pixel/lưu bản gốc/xuất/xóa rồi xóa dữ liệu thử đó. Chỉ chạy trên thiết bị thử nghiệm.
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
-## Các giới hạn cần biết
+## Project layout
 
-- Màu là xem trực tiếp; hạt film và tối góc được thêm khi lưu. Đây là preset sáng tạo, không phải tuyên bố tái tạo chính xác một dòng máy ảnh hay loại film thương mại.
-- Ảnh xử lý giới hạn cạnh dài tối đa 2560 px để kiểm soát bộ nhớ. Ảnh nhập giới hạn 40 MB. Không tự động nâng chất lượng camera phần cứng.
-- Ảnh nhập dùng thời gian chỉnh, được ghi nhãn riêng; không bịa thời gian/địa điểm chụp ban đầu.
-- Địa điểm GPS hiển thị tọa độ, không tự tra tên địa danh. Tên nơi chụp do người dùng nhập. Xem bản đồ cần ứng dụng bản đồ trên máy.
-- Chưa có Live Photo, video, xóa vật thể AI, làm đẹp khuôn mặt, photobooth, bản đồ nhúng hoặc đồng bộ cloud.
-- Hiệu năng, lấy nét, flash, màu camera, xoay ảnh và độ chính xác GPS cần kiểm tra trên điện thoại thật; giả lập không thay thế được bước này.
+- `app/src/main/java/com/edcam/` contains the Android UI, Camera2 controller, color transforms, and local photo storage.
+- `app/src/main/assets/` contains the offline Sakuga controls and their Android bridge.
+- `app/src/androidTest/` contains Android instrumentation checks.
+- `qa/` contains visual and interaction check scripts.
 
-## Cấu trúc
+The camera layout and interactions have been exercised on an Android emulator. The physical flash and performance on specific phone models still need device testing.
 
-`MainActivity`: màn hình và điều hướng. `CameraController`: Camera2 và vòng đời. `Presets`: công thức màu thuần Java. `PhotoProcessor`: giải mã, xoay EXIF, crop, màu, hạt, tối góc, dấu ảnh. `PhotoStore`: lưu ảnh, metadata và MediaStore. `Palette` / `IconView`: giao diện và biểu tượng.
-
-Tham khảo kỹ thuật chính thức: [Camera2](https://developer.android.com/media/camera/camera2), [TextureView](https://developer.android.com/reference/android/view/TextureView), [MediaStore](https://developer.android.com/training/data-storage/shared/media), [Android app signing](https://developer.android.com/studio/publish/app-signing).
+The Sakuga components are distributed under the [upstream MIT license](app/src/main/assets/Sakuga-LICENSE.txt). See the [asset manifest](docs/SAKUGA-ASSETS.json) for component sources and checksums.
