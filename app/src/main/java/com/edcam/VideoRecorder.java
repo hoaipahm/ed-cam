@@ -11,9 +11,13 @@ final class VideoRecorder {
   final File pending;
   private final VideoStore store;
   private MediaRecorder recorder;
+  private VideoColorSurface filter;
+  private Surface output;
+  private final float[] color;
   private boolean started, finished;
 
-  VideoRecorder(VideoStore store) {
+  VideoRecorder(VideoStore store, float[] color) {
+    this.color = color;
     this.store = store;
     pending = store.pending();
   }
@@ -45,10 +49,17 @@ final class VideoRecorder {
         });
     recorder.setOnErrorListener((r, what, extra) -> limit.run());
     recorder.prepare();
+    output = recorder.getSurface();
+    if (color != null)
+      try {
+        filter = new VideoColorSurface(output, size, color);
+      } catch (Exception e) {
+        throw new IOException("Không mở được bộ màu video.", e);
+      }
   }
 
   synchronized Surface surface() {
-    return recorder.getSurface();
+    return filter == null ? output : filter.input();
   }
 
   synchronized void start() {
@@ -66,10 +77,18 @@ final class VideoRecorder {
     finished = true;
     boolean valid = started;
     try {
+      if (filter != null) {
+        filter.close();
+        filter = null;
+      }
       if (started) recorder.stop();
     } catch (RuntimeException e) {
       valid = false;
     } finally {
+      if (output != null) {
+        output.release();
+        output = null;
+      }
       if (recorder != null) {
         recorder.release();
         recorder = null;
