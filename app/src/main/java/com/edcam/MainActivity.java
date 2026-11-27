@@ -27,11 +27,15 @@ public final class MainActivity extends Activity {
   private LinearLayout root, body, presetRow;
   private FrameLayout content, viewfinder;
   private TextureView texture;
-  private TextView status, styleTitle, countdown, notice, stampView;
+  private TextView status, styleTitle, countdown, notice, stampView, presetName;
   private GridOverlay gridOverlay;
   private CameraController camera;
-  private SakugaTabsLayer sakuga;
+  private SakugaTabsLayer sakuga, dialogLayer;
+  private Dialog controlsDialog;
   private View tabsAnchor;
+  private ProgressBar processingProgress;
+  private int progressEpoch;
+  private boolean comparing;
   private LocationManager locationManager;
   private Location location;
   private LocationListener locationListener;
@@ -106,6 +110,7 @@ public final class MainActivity extends Activity {
     super.onResume();
     resumed = true;
     if (sakuga != null) sakuga.onResume();
+    if (dialogLayer != null) dialogLayer.onResume();
     if (camera != null) camera.start();
     if (locationEnabled) startLocation();
     main.removeCallbacks(clock);
@@ -115,6 +120,7 @@ public final class MainActivity extends Activity {
   @Override
   protected void onPause() {
     if (sakuga != null) sakuga.onPause();
+    if (dialogLayer != null) dialogLayer.onPause();
     resumed = false;
     main.removeCallbacks(clock);
     stopLocation();
@@ -135,6 +141,7 @@ public final class MainActivity extends Activity {
 
   @Override
   protected void onDestroy() {
+    if (controlsDialog != null) controlsDialog.dismiss();
     if (sakuga != null) {
       sakuga.release();
       sakuga = null;
@@ -198,6 +205,7 @@ public final class MainActivity extends Activity {
     uiGeneration++;
     texture = null;
     stampView = null;
+    presetName = null;
     status = null;
     styleTitle = null;
     presetRow = null;
@@ -205,6 +213,7 @@ public final class MainActivity extends Activity {
     viewfinder = null;
     notice = null;
     tabsAnchor = null;
+    comparing = false;
     palette = Palette.get(themeId);
     setTheme(
         new int[] {
@@ -241,7 +250,7 @@ public final class MainActivity extends Activity {
           int bottom =
               shooting
                   ? (cutout == null ? 0 : cutout.getSafeInsetBottom())
-                  : insets.getSystemWindowInsetBottom();
+                  : insets.getStableInsetBottom();
           v.setPadding(0, top, 0, bottom);
           return insets;
         });
@@ -270,22 +279,24 @@ public final class MainActivity extends Activity {
     FrameLayout.LayoutParams np = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
     np.setMargins(dp(16), 0, dp(16), dp(12));
     content.addView(notice, np);
-    if (tabsAnchor != null) {
-      try {
-        if (sakuga == null || sakuga.unavailable())
-          sakuga = new SakugaTabsLayer(this, this::sakugaChanged);
-        if (sakuga.getParent() instanceof ViewGroup)
-          ((ViewGroup) sakuga.getParent()).removeView(sakuga);
-        scene.addView(sakuga, new FrameLayout.LayoutParams(-1, -1));
-        sakuga.target(tabsAnchor, shooting ? "camera" : "primary", shooting ? 1 : tab, palette);
-      } catch (RuntimeException unavailable) {
-        sakuga = null;
-        tabsAnchor.setVisibility(View.VISIBLE);
-      }
-    } else if (sakuga != null) {
+    processingProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+    processingProgress.setMax(100);
+    processingProgress.setContentDescription("Tiến độ xử lý: giải mã, áp màu, lưu ảnh");
+    processingProgress.setVisibility(View.GONE);
+    FrameLayout.LayoutParams progressParams =
+        new FrameLayout.LayoutParams(-1, dp(230), Gravity.CENTER);
+    progressParams.setMargins(dp(26), 0, dp(26), 0);
+    content.addView(processingProgress, progressParams);
+    try {
+      if (sakuga == null || sakuga.unavailable())
+        sakuga = new SakugaTabsLayer(this, this::sakugaChanged);
       if (sakuga.getParent() instanceof ViewGroup)
         ((ViewGroup) sakuga.getParent()).removeView(sakuga);
-      sakuga.onPause();
+      scene.addView(sakuga, new FrameLayout.LayoutParams(-1, -1));
+      sakuga.target(tabsAnchor, shooting ? "camera" : "primary", shooting ? 1 : tab, palette, root);
+    } catch (RuntimeException unavailable) {
+      sakuga = null;
+      if (tabsAnchor != null) tabsAnchor.setVisibility(View.VISIBLE);
     }
     remember();
   }
@@ -296,15 +307,7 @@ public final class MainActivity extends Activity {
       return;
     }
     if (mode.equals("camera") && value.equals("color")) {
-      new AlertDialog.Builder(this)
-          .setTitle("Cường độ · " + Presets.get(styleId).name)
-          .setView(strengthControl())
-          .setPositiveButton("Xong", null)
-          .setOnDismissListener(
-              d -> {
-                if (sakuga != null) sakuga.synchronizeSelection(1);
-              })
-          .show();
+      showStrength();
       return;
     }
     int target =
@@ -342,11 +345,11 @@ public final class MainActivity extends Activity {
               "Cường độ style",
               () -> {
                 if (!busy)
-                  new AlertDialog.Builder(this)
-                      .setTitle("Cường độ style")
-                      .setView(strengthControl())
-                      .setPositiveButton("Xong", null)
-                      .show();
+                  showAlert(
+                      new AlertDialog.Builder(this)
+                          .setTitle("Cường độ style")
+                          .setView(strengthControl())
+                          .setPositiveButton("Xong", null));
               },
               false));
     }
@@ -464,6 +467,21 @@ public final class MainActivity extends Activity {
         });
     texture.setContentDescription("Khung ngắm camera. Chạm để lấy nét.");
 
+    presetName =
+        text(Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%", 13, Color.WHITE);
+    presetName.setGravity(Gravity.CENTER);
+    presetName.setPadding(dp(12), dp(7), dp(12), dp(7));
+    presetName.setBackground(round(0xAA000000, 12));
+    LinearLayout photoLabels = new LinearLayout(this);
+    photoLabels.setOrientation(LinearLayout.VERTICAL);
+    photoLabels.setGravity(Gravity.CENTER_HORIZONTAL);
+    viewfinder.removeView(stampView);
+    photoLabels.addView(presetName, new LinearLayout.LayoutParams(-2, -2));
+    photoLabels.addView(stampView, new LinearLayout.LayoutParams(-1, -2));
+    FrameLayout.LayoutParams presetLabelParams =
+        new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+    presetLabelParams.bottomMargin = dp(12);
+    viewfinder.addView(photoLabels, presetLabelParams);
     LinearLayout tools = row();
     tools.setPadding(dp(8), 0, dp(8), 0);
     tools.setBackgroundColor(0x99000000);
@@ -473,8 +491,16 @@ public final class MainActivity extends Activity {
             flash ? "Flash bật" : "Flash tắt",
             () -> {
               if (camera == null) return;
+              if (!camera.isReady()) {
+                message("Chờ camera sẵn sàng rồi bật flash.");
+                return;
+              }
+              if (!camera.hasFlash()) {
+                message("Camera đang chọn không có đèn flash. Thử camera sau.");
+                return;
+              }
               flash = camera.setFlash(!flash);
-              if (!flash) message("Flash đã tắt hoặc máy không hỗ trợ flash.");
+              message(flash ? "Flash bật · đèn sáng khi chụp ảnh." : "Flash đã tắt.");
               remember();
               updateCameraActions();
             }));
@@ -499,6 +525,7 @@ public final class MainActivity extends Activity {
             }));
     TextView ratio = text(RATIO_NAMES[ratioId], 13, Color.WHITE);
     ratio.setGravity(Gravity.CENTER);
+    ratio.setTag("sakuga-ratio");
     ratio.setBackground(ripple(Color.TRANSPARENT, 24));
     ratio.setContentDescription("Tỷ lệ " + RATIO_NAMES[ratioId]);
     ratio.setOnClickListener(
@@ -552,13 +579,7 @@ public final class MainActivity extends Activity {
     intensity.setBackground(ripple(Color.TRANSPARENT, 12));
     intensity.setOnClickListener(
         v -> {
-          if (!busy)
-            new AlertDialog.Builder(this)
-                .setTitle(Presets.get(styleId).name)
-                .setView(strengthControl())
-                .setPositiveButton(
-                    "Xong", (d, w) -> intensity.setText("MÀU " + Math.round(strength * 100) + "%"))
-                .show();
+          if (!busy) showStrength();
         });
     modes.addView(intensity, new LinearLayout.LayoutParams(0, dp(48), 1));
     dock.addView(modes, new LinearLayout.LayoutParams(-1, dp(64)));
@@ -617,6 +638,7 @@ public final class MainActivity extends Activity {
             new CameraController.Listener() {
               public void ready() {
                 flash = camera.setFlash(flash);
+                updateCameraActions();
                 if (status != null) status.setVisibility(View.GONE);
                 applyLive();
                 main.postDelayed(
@@ -723,20 +745,20 @@ public final class MainActivity extends Activity {
     }
     if (prefs.getBoolean("askedCamera", false)
         && !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
-      new AlertDialog.Builder(this)
-          .setTitle("Cho phép dùng camera")
-          .setMessage(
-              "Mở Cài đặt → Quyền → Camera để Ed-Cam có thể chụp ảnh. Bạn vẫn có thể nhập ảnh để"
-                  + " chỉnh.")
-          .setPositiveButton(
-              "Mở cài đặt",
-              (d, w) ->
-                  startActivity(
-                      new Intent(
-                          Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                          Uri.parse("package:" + getPackageName()))))
-          .setNegativeButton("Để sau", null)
-          .show();
+      showAlert(
+          new AlertDialog.Builder(this)
+              .setTitle("Cho phép dùng camera")
+              .setMessage(
+                  "Mở Cài đặt → Quyền → Camera để Ed-Cam có thể chụp ảnh. Bạn vẫn có thể nhập ảnh"
+                      + " để chỉnh.")
+              .setPositiveButton(
+                  "Mở cài đặt",
+                  (d, w) ->
+                      startActivity(
+                          new Intent(
+                              Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                              Uri.parse("package:" + getPackageName()))))
+              .setNegativeButton("Để sau", null));
     } else {
       prefs.edit().putBoolean("askedCamera", true).apply();
       requestPermissions(new String[] {Manifest.permission.CAMERA}, CAMERA_PERMISSION);
@@ -800,6 +822,100 @@ public final class MainActivity extends Activity {
         0, Math.min(255, Math.round(m[o] * r + m[o + 1] * g + m[o + 2] * b + m[o + 4])));
   }
 
+  private void showAlert(AlertDialog.Builder builder) {
+    AlertDialog dialog = builder.create();
+    dialog.show();
+    controlsDialog = dialog;
+    if (sakuga != null) sakuga.onPause();
+    ViewGroup decor = (ViewGroup) dialog.getWindow().getDecorView();
+    SakugaTabsLayer controls = new SakugaTabsLayer(this, (mode, value, index) -> {});
+    dialogLayer = controls;
+    decor.addView(controls, new ViewGroup.LayoutParams(-1, -1));
+    controls.target(null, "none", 0, palette, decor);
+    dialog.setOnDismissListener(
+        ignored -> {
+          controls.release();
+          dialogLayer = null;
+          controlsDialog = null;
+          if (sakuga != null) sakuga.onResume();
+        });
+  }
+
+  private void showStrength() {
+    if (busy) return;
+    if (sakuga != null) sakuga.onPause();
+    Dialog dialog = new Dialog(this);
+    controlsDialog = dialog;
+    LinearLayout panel = new LinearLayout(this);
+    panel.setOrientation(LinearLayout.VERTICAL);
+    panel.setPadding(dp(18), dp(20), dp(18), dp(24));
+    panel.setBackground(round(palette.background, 16));
+    TextView heading = text(Presets.get(styleId).name, 22, palette.ink);
+    panel.addView(heading);
+    TextView help = text("Kéo để chỉnh màu. 0% giữ màu gốc.", 13, palette.muted);
+    help.setPadding(0, dp(8), 0, dp(8));
+    panel.addView(help);
+    panel.addView(strengthControl());
+    toggle(
+        panel,
+        "So sánh màu gốc",
+        "Tạm bỏ màu để so sánh; ảnh lưu vẫn dùng style đã chọn.",
+        false,
+        value -> {
+          comparing = value;
+          applyLive();
+        });
+    FrameLayout helpButton =
+        iconButton(
+            "settings",
+            "Màu xem trực tiếp và ảnh lưu dùng cùng công thức. Hạt film và tối góc được thêm khi"
+                + " lưu.",
+            () -> {},
+            false);
+    helpButton.setTag("sakuga-tooltip");
+    panel.addView(helpButton, new LinearLayout.LayoutParams(-1, dp(60)));
+    panel.addView(button("Xong", dialog::dismiss, true), new LinearLayout.LayoutParams(-1, dp(58)));
+    FrameLayout frame = new FrameLayout(this);
+    frame.addView(panel, new FrameLayout.LayoutParams(-1, -2));
+    SakugaTabsLayer controls = new SakugaTabsLayer(this, (m, v, i) -> {});
+    dialogLayer = controls;
+    frame.addView(controls, new FrameLayout.LayoutParams(-1, -1));
+    dialog.setContentView(frame);
+    dialog.setOnDismissListener(
+        d -> {
+          comparing = false;
+          applyLive();
+          controls.release();
+          dialogLayer = null;
+          controlsDialog = null;
+          if (sakuga != null) {
+            sakuga.onResume();
+            sakuga.synchronizeSelection(1);
+          }
+        });
+    dialog.show();
+    dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+    dialog.getWindow().setLayout(getResources().getDisplayMetrics().widthPixels - dp(24), -2);
+    controls.target(null, "none", 0, palette, panel);
+  }
+
+  private void progress(int value) {
+    main.post(
+        () -> {
+          if (destroyed || processingProgress == null) return;
+          int token = ++progressEpoch;
+          processingProgress.setVisibility(value < 0 ? View.GONE : View.VISIBLE);
+          processingProgress.setProgress(Math.max(0, value));
+          if (value == 100)
+            main.postDelayed(
+                () -> {
+                  if (token == progressEpoch && processingProgress != null)
+                    processingProgress.setVisibility(View.GONE);
+                },
+                10000);
+        });
+  }
+
   private View strengthControl() {
     LinearLayout line = row();
     line.setPadding(dp(20), 0, dp(16), 0);
@@ -811,16 +927,17 @@ public final class MainActivity extends Activity {
     slider.setProgressTintList(ColorStateList.valueOf(palette.accent));
     slider.setThumbTintList(ColorStateList.valueOf(palette.accent));
     slider.setContentDescription("Cường độ style");
-    line.addView(slider, new LinearLayout.LayoutParams(0, dp(48), 1));
+    line.addView(slider, new LinearLayout.LayoutParams(0, dp(76), 1));
     TextView value = text(Math.round(strength * 100) + "%", 12, palette.ink);
     line.addView(value, new LinearLayout.LayoutParams(dp(38), -2));
     slider.setOnSeekBarChangeListener(
         new SeekBar.OnSeekBarChangeListener() {
           public void onProgressChanged(SeekBar s, int p, boolean user) {
-            if (user && !busy) {
+            if (!busy) {
               strength = p / 100f;
               value.setText(p + "%");
               applyLive();
+              remember();
             }
           }
 
@@ -836,13 +953,18 @@ public final class MainActivity extends Activity {
 
   private void applyLive() {
     if (styleTitle != null) styleTitle.setText("ẢNH");
-    if (camera != null) camera.color(Presets.get(styleId), strength);
+    if (presetName != null)
+      presetName.setText(
+          comparing
+              ? "Đang so sánh · Màu gốc"
+              : Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%");
+    if (camera != null) camera.color(Presets.get(styleId), comparing ? 0 : strength);
     if (editor && editSource != null) {
       ImageView image = body.findViewWithTag("editorImage");
       if (image != null)
         image.setColorFilter(
             new ColorMatrixColorFilter(
-                new ColorMatrix(Presets.matrix(Presets.get(styleId), strength))));
+                new ColorMatrix(Presets.matrix(Presets.get(styleId), comparing ? 0 : strength))));
     }
   }
 
@@ -912,11 +1034,13 @@ public final class MainActivity extends Activity {
 
   private void processPhoto(byte[] bytes, boolean mirror, CaptureSettings s) {
     message("Đang tạo ảnh và lưu vào album…");
+    progress(0);
     worker.execute(
         () -> {
           Bitmap input = null, output = null;
           try {
             input = PhotoProcessor.decode(bytes);
+            progress(33);
             String stamp =
                 s.stamp
                     ? date(s.time, "dd.MM.yyyy  HH:mm") + (s.place.isEmpty() ? "" : "\n" + s.place)
@@ -926,6 +1050,7 @@ public final class MainActivity extends Activity {
             output =
                 PhotoProcessor.render(
                     input, Presets.get(s.style), s.strength, s.ratio, mirror, stamp);
+            progress(67);
             PhotoStore.Photo saved =
                 store.save(
                     output,
@@ -940,6 +1065,7 @@ public final class MainActivity extends Activity {
                     mirror,
                     s.ratio,
                     s.strength);
+            progress(100);
             main.post(
                 () -> {
                   if (destroyed) return;
@@ -951,9 +1077,11 @@ public final class MainActivity extends Activity {
                     tab = 2;
                     render();
                   }
+                  if (sakuga != null) sakuga.success("Chụp ảnh ngay");
                   message("Đã lưu ảnh vào album Ed-Cam.");
                 });
           } catch (Exception | OutOfMemoryError e) {
+            progress(-1);
             main.post(
                 () -> {
                   if (destroyed) return;
@@ -1015,6 +1143,7 @@ public final class MainActivity extends Activity {
                     group = name;
                     for (Map.Entry<String, Button> entry : buttons.entrySet()) {
                       boolean selected = group.equals(entry.getKey());
+                      entry.getValue().setSelected(selected);
                       entry.getValue().setTextColor(selected ? palette.onAccent : palette.accent);
                       entry
                           .getValue()
@@ -1159,6 +1288,7 @@ public final class MainActivity extends Activity {
           new IconView(MainActivity.this, "heart", starred ? palette.accent : palette.muted),
           new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
       holder.heart.setBackground(ripple(starred ? palette.line : Color.TRANSPARENT, 24));
+      holder.heart.setTag("sakuga-favorite");
       holder.heart.setContentDescription((starred ? "Bỏ yêu thích " : "Yêu thích ") + style.name);
       holder.heart.setOnClickListener(
           v -> {
@@ -1376,6 +1506,15 @@ public final class MainActivity extends Activity {
               });
         });
     title(page, photo.style, date(photo.time, "dd MMMM yyyy · HH:mm"));
+    RatingBar rating = new RatingBar(this, null, android.R.attr.ratingBarStyleSmall);
+    rating.setNumStars(5);
+    rating.setStepSize(1);
+    rating.setIsIndicator(false);
+    rating.setRating(prefs.getInt("rating-" + photo.id, 0));
+    rating.setContentDescription("Đánh dấu ảnh cá nhân từ 0 đến 5 sao");
+    rating.setOnRatingBarChangeListener(
+        (bar, value, user) -> prefs.edit().putInt("rating-" + photo.id, Math.round(value)).apply());
+    page.addView(rating, new LinearLayout.LayoutParams(-1, dp(60)));
     page.addView(
         text(
             photo.width
@@ -1434,14 +1573,14 @@ public final class MainActivity extends Activity {
         button(
             "Xóa khỏi album Ed-Cam",
             () ->
-                new AlertDialog.Builder(this)
-                    .setTitle("Xóa khoảnh khắc này?")
-                    .setMessage(
-                        "Xóa ảnh và bản gốc trong Ed-Cam. Ảnh đã xuất ra thư viện máy vẫn được"
-                            + " giữ.")
-                    .setNegativeButton("Giữ lại", null)
-                    .setPositiveButton("Xóa ảnh", (d, w) -> deletePhoto(photo))
-                    .show(),
+                showAlert(
+                    new AlertDialog.Builder(this)
+                        .setTitle("Xóa khoảnh khắc này?")
+                        .setMessage(
+                            "Xóa ảnh và bản gốc trong Ed-Cam. Ảnh đã xuất ra thư viện máy vẫn được"
+                                + " giữ.")
+                        .setNegativeButton("Giữ lại", null)
+                        .setPositiveButton("Xóa ảnh", (d, w) -> deletePhoto(photo))),
             false));
   }
 
@@ -1453,6 +1592,7 @@ public final class MainActivity extends Activity {
         () -> {
           try {
             store.export(photo, original);
+            progress(100);
             main.post(
                 () -> {
                   busy = false;
@@ -1660,35 +1800,24 @@ public final class MainActivity extends Activity {
     LinearLayout page = page(scroll);
     title(page, "Theo cách của bạn", "Giao diện, dấu ảnh và quyền riêng tư.");
     section(page, "Giao diện");
+    RadioGroup themes = new RadioGroup(this);
+    themes.setContentDescription("Chọn giao diện");
     for (int i = 0; i < Palette.ALL.length; i++) {
-      final int index = i;
-      Palette p = Palette.ALL[i];
-      LinearLayout line = row();
-      line.setPadding(dp(12), dp(9), dp(8), dp(9));
-      line.setBackground(ripple(palette.surface, 12));
-      View color = new View(this);
-      color.setBackground(round(p.accent, 18));
-      line.addView(color, new LinearLayout.LayoutParams(dp(34), dp(34)));
-      LinearLayout text = new LinearLayout(this);
-      text.setOrientation(LinearLayout.VERTICAL);
-      text.setPadding(dp(14), 0, 0, 0);
-      text.addView(text(p.name, 16, palette.ink));
-      text.addView(text(p.description, 12, palette.muted));
-      line.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
-      if (i == themeId)
-        line.addView(
-            new IconView(this, "check", palette.accent),
-            new LinearLayout.LayoutParams(dp(24), dp(24)));
-      line.setContentDescription("Giao diện " + p.name + (i == themeId ? ", đang dùng" : ""));
-      line.setOnClickListener(
-          v -> {
-            themeId = index;
-            render();
-          });
-      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-      lp.bottomMargin = dp(7);
-      page.addView(line, lp);
+      RadioButton option = new RadioButton(this);
+      option.setId(1000 + i);
+      option.setText(Palette.ALL[i].name);
+      option.setMinHeight(dp(60));
+      themes.addView(option, new RadioGroup.LayoutParams(-1, dp(60)));
     }
+    themes.check(1000 + themeId);
+    themes.setOnCheckedChangeListener(
+        (group, id) -> {
+          if (id >= 1000 && id < 1000 + Palette.ALL.length && themeId != id - 1000) {
+            themeId = id - 1000;
+            render();
+          }
+        });
+    page.addView(themes, new LinearLayout.LayoutParams(-1, dp(300)));
     section(page, "Khi lưu ảnh");
     toggle(
         page,
@@ -1724,6 +1853,7 @@ public final class MainActivity extends Activity {
         });
     EditText label = new EditText(this);
     label.setText(place);
+    label.setMinHeight(dp(70));
     label.setTextColor(palette.ink);
     label.setHintTextColor(palette.muted);
     label.setHint("Tên nơi chụp do bạn nhập (tùy chọn)");
@@ -1758,7 +1888,7 @@ public final class MainActivity extends Activity {
     section(page, "Về Ed-Cam");
     paragraph(
         page,
-        "Phiên bản 1.1.0 · 60 preset màu · 5 giao diện\n"
+        "Phiên bản 1.2.0 · 180 preset màu · 5 giao diện\n"
             + "Ảnh đầu ra tối đa 2560 px ở cạnh dài. Màu hiển thị trực tiếp; hạt film và tối góc"
             + " được thêm khi lưu. Chất ảnh phụ thuộc camera và ánh sáng.");
   }
@@ -1781,7 +1911,7 @@ public final class MainActivity extends Activity {
     Switch toggle = new Switch(this);
     toggle.setChecked(checked);
     toggle.setContentDescription(name);
-    toggle.setMinimumWidth(dp(54));
+    toggle.setMinimumWidth(dp(78));
     toggle.setMinimumHeight(dp(48));
     toggle.setThumbTintList(
         new ColorStateList(
@@ -1793,20 +1923,33 @@ public final class MainActivity extends Activity {
   }
 
   private void themeDialog() {
-    String[] names = new String[Palette.ALL.length];
-    for (int i = 0; i < names.length; i++) names[i] = Palette.ALL[i].name;
-    new AlertDialog.Builder(this)
-        .setTitle("Giao diện Ed-Cam")
-        .setSingleChoiceItems(
-            names,
-            themeId,
-            (dialog, index) -> {
-              themeId = index;
-              dialog.dismiss();
-              render();
-            })
-        .setNegativeButton("Đóng", null)
-        .show();
+    if (editor || detail != null) {
+      // Keep an in-progress edit intact. The radio picker is local to this dialog.
+      RadioGroup options = new RadioGroup(this);
+      for (int i = 0; i < Palette.ALL.length; i++) {
+        RadioButton option = new RadioButton(this);
+        option.setId(2000 + i);
+        option.setText(Palette.ALL[i].name);
+        options.addView(option, new RadioGroup.LayoutParams(-1, dp(56)));
+      }
+      options.check(2000 + themeId);
+      int[] selection = {themeId};
+      options.setOnCheckedChangeListener((group, id) -> selection[0] = id - 2000);
+      showAlert(
+          new AlertDialog.Builder(this)
+              .setTitle("Giao diện Ed-Cam")
+              .setView(options)
+              .setPositiveButton(
+                  "Áp dụng",
+                  (dialog, which) -> {
+                    themeId = selection[0];
+                    render();
+                  })
+              .setNegativeButton("Đóng", null));
+      return;
+    }
+    tab = 3;
+    render();
   }
 
   private boolean freshLocation() {
@@ -2005,6 +2148,7 @@ public final class MainActivity extends Activity {
   private Button button(String label, Runnable action, boolean primary) {
     Button b = new Button(this);
     b.setText(label);
+    b.setSelected(primary);
     b.setTextSize(14);
     b.setAllCaps(false);
     b.setTextColor(primary ? palette.onAccent : palette.accent);
@@ -2086,8 +2230,9 @@ public final class MainActivity extends Activity {
 
   private void message(String message) {
     if (destroyed || notice == null) return;
+    if (sakuga != null && !sakuga.unavailable()) sakuga.toast(message);
     notice.setText(message);
-    notice.setVisibility(View.VISIBLE);
+    notice.setVisibility(sakuga != null && !sakuga.unavailable() ? View.GONE : View.VISIBLE);
     notice.bringToFront();
     notice.removeCallbacks(hideNotice);
     notice.postDelayed(hideNotice, 5500);
