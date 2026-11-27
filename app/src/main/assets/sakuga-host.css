@@ -1,7 +1,7 @@
 :root {
   --sk-card: #fffdf8; --sk-ink: #292440; --sk-dim: #777087;
-  --sk-soft: #d1c5ef; --sk-pri: #b6a6ed; --sk-pri-ink: #292440;
-  --sk-acc: #ec83ad; --sk-track: #e5ddf3; --sk-bw: 2.4px;
+  --sk-soft: #d1c5ef; --sk-pri: #8f8df7; --sk-pri-ink: #292440;
+  --sk-acc: #ec83ad; --sk-track: #c9cbe0; --sk-bw: 2.4px;
   --sk-sh: 3px 4px 0 var(--sk-soft);
 }
 * { box-sizing: border-box; }
@@ -20,3 +20,35 @@ sakuga-tabs::part(tab) { flex: 1 1 0; min-width: 0; min-height: 48px; padding: 1
 body.demo { background: #f7f4ed; min-height: 100vh; }
 body.demo .tab-host { left: max(0px, calc((100vw - 640px)/2)); width: min(100vw, 640px); bottom: 24px; height: 76px; }
 body.demo #camera-host { bottom: 112px; }
+
+/* Original gallery components, fitted to native Android anchors. Their VFX code is unchanged. */
+#controls-host { position: fixed; inset: 0; margin: 0; pointer-events: none; }
+.control-slot { position: fixed; display: flex; align-items: center; justify-content: center; pointer-events: auto; z-index: 3; }
+.control-slot sakuga-button { max-width: calc(100% - 10px); }
+sakuga-button::part(button) { min-height: 42px; max-width: 100%; padding: 7px 9px; font-size: 14px; white-space: normal; line-height: 1.15; }
+.kind-toggle sakuga-toggle { margin: 0; flex: none; }
+.kind-slider { padding-top: 10px; }
+sakuga-slider { --sk-slider-width: var(--slot-width); }
+sakuga-input { --sk-input-width: var(--slot-width); }
+sakuga-input::part(input) { min-height: 48px; font-size: 14px; padding: 10px 12px; }
+sakuga-radio { width: calc(100% - 12px); }
+sakuga-radio::part(option) { min-height: 48px; font-size: 16px; }
+sakuga-rating::part(star) { width: 48px; height: 48px; }
+sakuga-checkbox::part(label) { min-height: 48px; }
+#app-toast { position: fixed; left: 20px; right: 20px; bottom: 100px; pointer-events: auto; z-index: 6; width: calc(100% - 40px); }
+#app-toast::part(toast) { max-width: 100%; }
+.kind-progress { background: var(--sk-card); border-radius: 16px; }
+sakuga-progress { --sk-progress-width: var(--slot-width); }
+::selection { background: #d1c5ef; color: #292440; }
+
+#app-toast::part(toast) { width: 100%; white-space: normal; }
+#app-toast::part(close) { min-width: 48px; min-height: 48px; }
+sakuga-tooltip { margin-top: 0; }
+
+sakuga-button.shutter::part(button) { width: 68px; height: 68px; font-size: 32px; }
+#app-toast { pointer-events: none; } #app-toast::part(toast) { pointer-events: auto; }
+
+sakuga-button.selected[variant="secondary"]::part(button) { background: var(--sk-pri); color: var(--sk-pri-ink); }
+#app-toast { bottom: 200px; }
+
+sakuga-tooltip::part(tip) { translate: calc(-50% + var(--tip-shift, 0px)) 0; max-width: min(220px, calc(100vw - 40px)); }
