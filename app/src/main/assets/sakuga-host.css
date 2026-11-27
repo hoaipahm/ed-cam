@@ -61,3 +61,27 @@ sakuga-button.compact::part(button) {
   padding-inline: 5px;
 }
 sakuga-rating::part(star) { width: min(48px, calc(var(--slot-width) / 5)); }
+
+/* Keep the viewfinder dominant and give the shutter its own visual weight. */
+body[data-screen="camera"] .control-slot.kind-button:not(:has(.shutter)),
+body[data-screen="camera"] #camera-host {
+  --sk-card: #23212b;
+  --sk-ink: #f3edf9;
+  --sk-bw: 1px;
+  --sk-sh: none;
+}
+body[data-screen="camera"] sakuga-button:not(.shutter)::part(button) {
+  min-width: 40px;
+  border-color: #5b5368;
+  border-radius: 14px;
+}
+body[data-screen="camera"] #camera-host sakuga-tabs { max-width: 260px; }
+body[data-screen="camera"] #camera-host sakuga-tabs::part(tab) {
+  font-size: 12px;
+  border-left-color: #5b5368;
+}
+body[data-screen="camera"] sakuga-button.shutter::part(button) {
+  border-radius: 50%;
+  font-style: normal;
+  box-shadow: 0 0 0 3px #9586bb;
+}
