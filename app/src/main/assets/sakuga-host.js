@@ -6,7 +6,7 @@
   const tabs = { primary: document.querySelector('#primary-tabs'), camera: document.querySelector('#camera-tabs') };
   const controlNodes = new Map();
   const controlHost = document.querySelector('#controls-host');
-  const iconText = { 'Flash bật': 'ϟ Bật', 'Flash tắt': 'ϟ Tắt', 'Hẹn giờ': '◷',
+  const iconText = { 'Flash bật': 'ϟ Bật', 'Flash tắt': 'ϟ Tắt', 'Hẹn giờ': '◷',
     'Lưới bật': '▦', 'Lưới tắt': '▦', 'Cài đặt': '⚙', 'Album ảnh': '▧',
     'Đổi camera trước hoặc sau': '⇄', 'Chụp ảnh ngay': '●', 'Quay lại': '‹', 'Chọn giao diện': '◐' };
   function configureControls(config) {
@@ -67,7 +67,11 @@
       element.classList.toggle('selected', !!node.selected);
       if (node.kind === 'checkbox') element.shadowRoot?.querySelector('input')?.setAttribute('aria-label', node.label);
       element.setAttribute('label', node.label || node.placeholder || 'Ed-Cam');
-      if (node.kind === 'button') element.textContent = iconText[node.label] || node.label;
+      if (node.kind === 'button') {
+        element.textContent = iconText[node.label] || node.label;
+        element.classList.toggle('compact', !!iconText[node.label] && !element.classList.contains('shutter'));
+        element.shadowRoot?.querySelector('button')?.setAttribute('aria-label', node.label);
+      }
       if (['toggle','checkbox'].includes(node.kind)) {
         if (element.checked !== (node.value === 'true')) element.checked = node.value === 'true';
       } else if (node.kind === 'progress') {
