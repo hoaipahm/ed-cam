@@ -25,3 +25,14 @@ WebView được dùng lại giữa các trang. Sau 1,8 giây **theo đồng h�
 Skill được cài bằng `npx skills add finktheartist/sakuga-vfx --skill sakuga-vfx --agent codex --global --yes --copy`, tại `C:/Users/THE HOAI/.agents/skills/sakuga-vfx`. Đã đọc và theo các phần Wire it in / Check it. Tham chiếu: https://sakuga-vfx.vercel.app/skills/sakuga-vfx/SKILL.md .
 
 Chưa xác minh TalkBack trên máy thật và ánh xạ cài đặt giảm chuyển động Android sang media query của từng phiên bản Android System WebView. Kiểm tra reduced-motion nói trên là emulation trong Chrome, không đại diện cho mọi máy Android.
+
+
+## 1.2.0: mở rộng toàn bộ điều khiển
+
+Gallery tham chiếu: https://sakuga-vfx.vercel.app/gallery/ . Các script `button`, `toggle`, `slider`, `checkbox`, `radio`, `input`, `progress`, `rating`, `toast`, `tooltip` được tải nguyên file và dùng cùng `tabs.js` cũ qua script tag thường. Danh sách URL/hash: `SAKUGA-ASSETS.json`. Không sửa nguồn hiệu ứng hoặc tách core.
+
+`SakugaTabsLayer.collect` tìm các anchor native đang thấy, gửi vị trí/giá trị và vùng clip đến `configureTabs` / `configureControls`. `AndroidTabs.control(epoch,id,value)` kiểm tra epoch và native View trước khi gọi listener thật. Ô nhập nghe trực tiếp input bên trong shadow root để tương thích Android WebView. Chạm ngoài hitbox đi đến camera/native UI; vuốt trên nút trong vùng cuộn chuyển đến scroller native. Khi WebView renderer lỗi, trả lại các điều khiển native.
+
+Ứng dụng dùng một lớp chính; dialog dùng một lớp tạm và giải phóng khi đóng. Lớp chính tạm nghỉ khi dialog mở. Cơ chế nghỉ chờ đồng hồ hiệu ứng gốc; thông báo có thời gian chờ dài hơn để không đóng băng giữa chừng. Không khẳng định mọi điện thoại đều có cùng hiệu năng hoặc hỗ trợ TalkBack/giảm chuyển động giống Chrome.
+
+Nút thao tác app và xác nhận app dùng Sakuga. Hộp xin quyền Android, trình chọn tệp và chọn ngày của hệ điều hành vẫn native.
