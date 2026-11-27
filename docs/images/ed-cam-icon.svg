@@ -1,6 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-<rect x="2" y="2" width="104" height="104" rx="25" fill="#253A31" stroke="#668475" stroke-width="2"/>
-<path fill="#F5EFDF" d="M26,32h13l5,-7h20l5,7h13a7,7 0,0 1,7 7v38a7,7 0,0 1,-7 7h-56a7,7 0,0 1,-7 -7v-38a7,7 0,0 1,7 -7"/>
-<path fill="#253A31" d="M54,39a18,18 0,1 0,0 36a18,18 0,1 0,0 -36"/>
-<path fill="#D9E8AA" d="M54,47a10,10 0,1 0,0 20a10,10 0,1 0,0 -20"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">
+  <rect width="80" height="80" rx="18" fill="#1B1927"/>
+  <g transform="translate(-14 -14)">
+    <path transform="translate(0.43 -0.74)" fill="#FFE8A4" d="M54.00,27.00 A27,27 0,0 1,77.38,40.50 L63.53,59.50 L63.53,48.50 Z"/>
+    <path transform="translate(0.85 0.00)" fill="#FFBE78" d="M77.38,40.50 A27,27 0,0 1,77.38,67.50 L54.00,65.00 L63.53,59.50 Z"/>
+    <path transform="translate(0.43 0.74)" fill="#F79088" d="M77.38,67.50 A27,27 0,0 1,54.00,81.00 L44.47,59.50 L54.00,65.00 Z"/>
+    <path transform="translate(-0.42 0.74)" fill="#AD98DA" d="M54.00,81.00 A27,27 0,0 1,30.62,67.50 L44.47,48.50 L44.47,59.50 Z"/>
+    <path transform="translate(-0.85 0.00)" fill="#94CBDF" d="M30.62,67.50 A27,27 0,0 1,30.62,40.50 L54.00,43.00 L44.47,48.50 Z"/>
+    <path transform="translate(-0.43 -0.74)" fill="#A0E1CA" d="M30.62,40.50 A27,27 0,0 1,54.00,27.00 L63.53,48.50 L54.00,43.00 Z"/>
+  </g>
 </svg>
