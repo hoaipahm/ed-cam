@@ -44,6 +44,19 @@ public final class PixelInstrumentation extends Instrumentation {
           "monochrome output");
       Bitmap film = PhotoProcessor.render(input, Presets.get(7), 1, .75f, false, "26.11.2026");
       check(film.getPixel(60, 80) != identity.getPixel(60, 80), "film alters actual pixels");
+      for (Presets.Style style : Presets.ALL) {
+        Bitmap rendered = PhotoProcessor.render(input, style, 1, 0, false, "");
+        check(
+            rendered.getWidth() == 120 && rendered.getHeight() == 160,
+            "all presets render on Android: " + style.name);
+        check(Color.alpha(rendered.getPixel(60, 80)) == 255, "preset preserves opacity");
+        rendered.recycle();
+      }
+      Bitmap bluePrint = PhotoProcessor.render(input, Presets.get(62), 1, 0, false, "");
+      check(
+          Color.blue(bluePrint.getPixel(60, 80)) > Color.red(bluePrint.getPixel(60, 80)) + 40,
+          "cyanotype has a clearly blue tonal palette");
+      bluePrint.recycle();
       ByteArrayOutputStream encoded = new ByteArrayOutputStream();
       input.compress(Bitmap.CompressFormat.JPEG, 95, encoded);
       byte[] raw = encoded.toByteArray();
