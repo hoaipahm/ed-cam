@@ -1,3 +1,14 @@
+# Hiệu năng và giới hạn
+
+## 1.2.0 (2026-11-27)
+
+- Cache ma trận màu hoàn chỉnh cho 180 style; khi đổi cường độ chỉ nội suy với ma trận gốc.
+- Giới hạn texture hạt ở 512×512 thay vì tăng theo toàn bộ ảnh; dùng PRNG số nguyên xác định để tránh gọi Random nhiều lần cho mỗi pixel.
+- Chỉ tạo component cho anchor nhìn thấy, dùng lại node và một WebView chính. Không gửi lại cấu hình nếu vị trí/giá trị không thay đổi; dialog tạm được giải phóng khi đóng.
+- Những thay đổi này đã được kiểm tra chức năng; không suy ra phần trăm tăng tốc hoặc FPS trên điện thoại từ việc đọc mã. Phản hồi người dùng cho biết bản 1.1 chạy khá mượt trên máy của họ. Bản mới vẫn cần thử thực tế vì đã thêm nhiều điều khiển có hiệu ứng.
+
+Các số đo bên dưới là lịch sử **1.0.2 so với 1.1.0**, không phải benchmark 1.2.0.
+
 # Hiệu năng Ed-Cam 1.1.0
 
 Chưa thể xác nhận app mượt trên điện thoại thật. Có cải thiện thao tác camera, đồng thời lớp Sakuga WebView làm tăng RAM và thời gian khung hình trên giả lập GPU phần mềm. Đây là đánh đổi thực tế của bản tích hợp nguyên hiệu ứng người dùng yêu cầu.
