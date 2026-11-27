@@ -9,7 +9,7 @@ Vietnamese-speaking individual taking and keeping personal photographs on an And
 ## Product Purpose
 A personal photo and video camera with live photo styles, hardware-aware zoom, optional capture time and location, a local media album and selectable interface themes.
 ## Capabilities and Constraints
-No accounts, social feed, analytics or advertising. Media stays on-device. Location and video audio are optional. Original and edited photos can both be retained. Android 10+ is the target. Zoom comes from Camera2 capabilities; do not invent 0.3x or 20x support. Video is MP4/H.264, up to 1080p/30fps depending on camera support, and uses original camera colors. Photo output remains bounded to 2560px on the long edge, with original bytes kept separately when enabled.
+No accounts, social feed, analytics or advertising. Capture and editing stay on-device. Users can explicitly send a rendered photo or publish a revocable link on their configured HTTPS server. Location and video audio are optional. Original and edited photos can both be retained. Android 10+ is the target. Zoom comes from Camera2 capabilities; do not invent 0.3x or 20x support. Video is MP4/H.264, up to 1080p/30fps depending on camera support, and supports the live preset RGB transform. Photo output remains bounded to 2560px on the long edge, with original bytes kept separately when enabled.
 ## Product Principles
 Camera first. Keep originals safe. Explain permissions. Never invent photo or location data. Persist user choices.
 ## Open Decisions

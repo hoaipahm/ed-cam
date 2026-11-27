@@ -117,7 +117,7 @@ public final class CameraController {
   public void startVideo(VideoStore store, boolean audio) {
     if (!isReady() || recording != null) return;
     final int token = generation;
-    final VideoRecorder recorder = new VideoRecorder(store);
+    final VideoRecorder recorder = new VideoRecorder(store, videoColor);
     recording = recorder;
     preparingVideo = true;
     try {
@@ -164,6 +164,7 @@ public final class CameraController {
       request.addTarget(previewSurface);
       request.addTarget(output);
       autoFocusMode(request, true);
+      applyTorch(request);
       applyZoom(request);
       camera.createCaptureSession(
           Arrays.asList(previewSurface, output),
@@ -253,9 +254,52 @@ public final class CameraController {
     if (enabled && texture.isAvailable()) open();
   }
 
+  String report() {
+    StringBuilder info = new StringBuilder();
+    if (catalog != null)
+      for (CameraCatalog.Lens l : catalog.lenses)
+        info.append("ID ")
+            .append(l.id)
+            .append(" · ")
+            .append(String.format(java.util.Locale.US, "%.2f× – %.1f×", l.minZoom(), l.maxZoom()))
+            .append(
+                Boolean.TRUE.equals(l.info.get(CameraCharacteristics.FLASH_INFO_AVAILABLE))
+                    ? " · LED"
+                    : "")
+            .append("\n");
+    return info.toString();
+  }
+
   public boolean hasFlash() {
     return characteristics != null
         && Boolean.TRUE.equals(characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE));
+  }
+
+  private boolean autoFlash, assistFlash, torch;
+
+  void setPhotoFlash(int mode) {
+    setFlash(mode != 0);
+    autoFlash = mode == 1;
+    assistFlash = mode == 3;
+  }
+
+  boolean setTorch(boolean on) {
+    torch = on && videoMode && hasFlash();
+    if (session != null && preview != null)
+      try {
+        applyTorch(preview);
+        session.setRepeatingRequest(preview.build(), null, main);
+      } catch (CameraAccessException | RuntimeException e) {
+        torch = false;
+      }
+    return torch;
+  }
+
+  private void applyTorch(CaptureRequest.Builder request) {
+    if (videoMode)
+      request.set(
+          CaptureRequest.FLASH_MODE,
+          torch && hasFlash() ? CaptureRequest.FLASH_MODE_TORCH : CaptureRequest.FLASH_MODE_OFF);
   }
 
   public boolean setFlash(boolean requested) {
@@ -263,7 +307,10 @@ public final class CameraController {
     return flash;
   }
 
+  private float[] videoColor;
+
   public void color(Presets.Style style, float strength) {
+    videoColor = style.id == 0 || strength == 0 ? null : Presets.matrix(style, strength);
     Paint p = new Paint();
     p.setColorFilter(new ColorMatrixColorFilter(new ColorMatrix(Presets.matrix(style, strength))));
     texture.setLayerPaint(p);
@@ -429,6 +476,7 @@ public final class CameraController {
                   () -> {
                     if (token == generation) {
                       capturing = false;
+                      restorePreview();
                       listener.error("Không đọc được ảnh. Hãy chụp lại.");
                     }
                   });
@@ -560,6 +608,24 @@ public final class CameraController {
       captureStill(token);
       return;
     }
+    if (assistFlash) {
+      try {
+        preview.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+        preview.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+        session.setRepeatingRequest(preview.build(), null, main);
+        main.postDelayed(
+            () -> {
+              if (token == generation && sequence == captureSequence && capturing)
+                captureStill(token);
+            },
+            350);
+      } catch (CameraAccessException | RuntimeException e) {
+        capturing = false;
+        restorePreview();
+        listener.error("Không bật được đèn hỗ trợ trên ống kính này.");
+      }
+      return;
+    }
     // Some phones require the AE precapture cycle before a still request can fire the strobe.
     waitingForFlash = true;
     sawPrecapture = false;
@@ -608,7 +674,10 @@ public final class CameraController {
     int[] modes = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES);
     if (modes != null)
       for (int mode : modes)
-        if (mode == CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH) return mode;
+        if (mode
+            == (autoFlash
+                ? CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH
+                : CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)) return mode;
     return CaptureRequest.CONTROL_AE_MODE_ON;
   }
 
@@ -634,12 +703,15 @@ public final class CameraController {
       request.addTarget(reader.getSurface());
       autoFocusMode(request, false);
       applyZoom(request);
-      request.set(
-          CaptureRequest.CONTROL_AE_MODE,
-          flash && hasFlash() ? flashAeMode() : CaptureRequest.CONTROL_AE_MODE_ON);
-      request.set(
-          CaptureRequest.FLASH_MODE,
-          flash && hasFlash() ? CaptureRequest.FLASH_MODE_SINGLE : CaptureRequest.FLASH_MODE_OFF);
+      int aeMode =
+          flash && hasFlash() && !assistFlash ? flashAeMode() : CaptureRequest.CONTROL_AE_MODE_ON;
+      request.set(CaptureRequest.CONTROL_AE_MODE, aeMode);
+      if (aeMode == CaptureRequest.CONTROL_AE_MODE_ON) {
+        int lamp = CaptureRequest.FLASH_MODE_OFF;
+        if (flash && !autoFlash && hasFlash())
+          lamp = assistFlash ? CaptureRequest.FLASH_MODE_TORCH : CaptureRequest.FLASH_MODE_SINGLE;
+        request.set(CaptureRequest.FLASH_MODE, lamp);
+      }
       Integer sensor = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
       int degrees = rotationDegrees();
       request.set(
@@ -648,6 +720,21 @@ public final class CameraController {
       session.capture(
           request.build(),
           new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(
+                CameraCaptureSession session, CaptureRequest req, TotalCaptureResult result) {
+              if (token != generation || !flash || autoFlash || assistFlash) return;
+              Integer state = result.get(CaptureResult.FLASH_STATE);
+              if (state != null
+                  && state != CaptureResult.FLASH_STATE_FIRED
+                  && state != CaptureResult.FLASH_STATE_PARTIAL)
+                android.widget.Toast.makeText(
+                        texture.getContext(),
+                        "Camera chưa báo đèn nháy. Thử Flash → Đèn hỗ trợ khi chụp.",
+                        android.widget.Toast.LENGTH_SHORT)
+                    .show();
+            }
+
             @Override
             public void onCaptureFailed(
                 CameraCaptureSession s, CaptureRequest r, CaptureFailure f) {

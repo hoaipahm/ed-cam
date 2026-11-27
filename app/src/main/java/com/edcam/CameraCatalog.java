@@ -59,7 +59,20 @@ final class CameraCatalog {
             lens.logical = true;
       lenses.add(lens);
     }
-    float reference = lenses.isEmpty() ? 1 : fieldOfViewScale(lenses.get(0).info);
+    // Prefer the logical main camera. For discrete lenses estimate the main wide
+    // camera by proximity to a 26 mm full-frame equivalent horizontal angle.
+    Lens primary = null;
+    double bestScore = Double.POSITIVE_INFINITY;
+    for (Lens candidate : lenses) {
+      double score = Math.abs(Math.log(fieldOfViewScale(candidate.info) * 36 / 26.0));
+      if (candidate.logical) score -= 10;
+      if (candidate.logical && candidate.min < 1) score -= 10;
+      if (score < bestScore) {
+        primary = candidate;
+        bestScore = score;
+      }
+    }
+    float reference = primary == null ? 1 : fieldOfViewScale(primary.info);
     float low = 1, high = 1;
     for (Lens lens : lenses) {
       lens.base = fieldOfViewScale(lens.info) / reference;
@@ -71,8 +84,14 @@ final class CameraCatalog {
   }
 
   Lens select(float zoom) {
+    Lens logical = null;
     for (Lens lens : lenses)
-      if (lens.logical && zoom >= lens.minZoom() && zoom <= lens.maxZoom()) return lens;
+      if (lens.logical
+          && zoom >= lens.minZoom()
+          && zoom <= lens.maxZoom()
+          && (logical == null || Math.abs(lens.base - 1) < Math.abs(logical.base - 1)))
+        logical = lens;
+    if (logical != null) return logical;
     Lens best = null;
     for (Lens lens : lenses) {
       if (zoom < lens.minZoom() - .001f || zoom > lens.maxZoom() + .001f) continue;

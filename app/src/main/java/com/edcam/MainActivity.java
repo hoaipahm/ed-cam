@@ -14,22 +14,31 @@ import android.provider.Settings;
 import android.view.*;
 import android.widget.*;
 import java.io.*;
+import java.nio.file.Files;
 import java.text.*;
 import java.util.*;
 import java.util.concurrent.*;
+import org.json.*;
 
 public final class MainActivity extends Activity {
   private final Handler main = new Handler(Looper.getMainLooper());
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   private android.content.SharedPreferences prefs;
   private PhotoStore store;
+  private PhotoStore.Photo guidePhoto;
+  private float guideOpacity = .35f;
+  private String cameraReport = "";
+  private final ExecutorService network = Executors.newSingleThreadExecutor();
+  private static final int[] DEFAULT_TRIO = {0, 6, 18};
   private VideoStore videos;
   private boolean videoMode, recordingVideo, videoPaused, videoStarting;
   private boolean recordAfterPermission;
   private boolean videoAudio = true;
   private ShutterButton shutterButton;
-  private LinearLayout zoomControls;
-  private TextView zoomLabel, videoClock;
+  private ZoomTabs zoomTabs;
+  private int flashMode;
+  private boolean torch;
+  private TextView videoClock;
   private Button pauseRecording;
   private long videoStarted, pauseStarted, pausedDuration;
   private final CaptureCountdown captureCountdown = new CaptureCountdown();
@@ -115,6 +124,7 @@ public final class MainActivity extends Activity {
     store = new PhotoStore(this);
     videos = new VideoStore(this);
     timer = prefs.getInt("timer", 0);
+    flashMode = prefs.getInt("flashMode", 0);
     if (timer != 0 && timer != 3 && timer != 10) timer = 0;
     videoAudio = prefs.getBoolean("videoAudio", true);
     styleId = prefs.getInt("style", 0);
@@ -179,6 +189,7 @@ public final class MainActivity extends Activity {
     uiGeneration++;
     main.removeCallbacksAndMessages(null);
     worker.shutdown();
+    network.shutdown();
     super.onDestroy();
   }
 
@@ -251,8 +262,7 @@ public final class MainActivity extends Activity {
     captureCountdown.cancel();
     uiGeneration++;
     shutterButton = null;
-    zoomControls = null;
-    zoomLabel = null;
+    zoomTabs = null;
     videoClock = null;
     texture = null;
     stampView = null;
@@ -444,8 +454,20 @@ public final class MainActivity extends Activity {
                 message("Camera này không có đèn flash.");
                 return;
               }
-              flash = camera.setFlash(!flash);
-              updateCameraActions();
+              showAlert(
+                  new AlertDialog.Builder(this)
+                      .setTitle("Flash khi chụp")
+                      .setSingleChoiceItems(
+                          new String[] {"Tắt", "Tự động", "Bật", "Đèn hỗ trợ khi chụp"},
+                          flashMode,
+                          (dialog, which) -> {
+                            flashMode = which;
+                            prefs.edit().putInt("flashMode", which).apply();
+                            camera.setPhotoFlash(which);
+                            flash = which != 0;
+                            updateCameraActions();
+                            dialog.dismiss();
+                          }));
             }));
     tools.addView(
         cameraTool(
@@ -464,9 +486,18 @@ public final class MainActivity extends Activity {
     tools.addView(
         cameraTool(
             "ratio",
-            videoMode ? "16:9" : RATIO_NAMES[ratioId],
+            videoMode ? (torch ? "Đèn bật" : "Đèn tắt") : RATIO_NAMES[ratioId],
             () -> {
-              if (!busy && !videoMode) {
+              if (videoMode && camera != null && !videoStarting) {
+                torch = camera.setTorch(!torch);
+                View item = body.findViewWithTag("camera-ratio");
+                if (item instanceof LinearLayout) {
+                  String label = torch ? "Đèn bật" : "Đèn tắt";
+                  ((TextView) ((LinearLayout) item).getChildAt(1)).setText(label);
+                  item.setContentDescription(label);
+                }
+                if (!camera.hasFlash()) message("Ống kính này không có đèn quay.");
+              } else if (!busy) {
                 ratioId = (ratioId + 1) % 3;
                 remember();
                 render();
@@ -522,6 +553,7 @@ public final class MainActivity extends Activity {
     FocusTextureView focusTexture = new FocusTextureView(this);
     texture = focusTexture;
     viewfinder.addView(texture, new FrameLayout.LayoutParams(-1, -1));
+    if (guidePhoto != null && !videoMode) addGuide();
     gridOverlay = new GridOverlay(this);
     gridOverlay.setVisibility(grid ? View.VISIBLE : View.GONE);
     viewfinder.addView(gridOverlay, new FrameLayout.LayoutParams(-1, -1));
@@ -554,26 +586,25 @@ public final class MainActivity extends Activity {
     countdown.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
     viewfinder.addView(countdown, new FrameLayout.LayoutParams(-1, -1));
 
-    LinearLayout zoomRow = row();
-    HorizontalScrollView zoomScroll = new HorizontalScrollView(this);
-    zoomScroll.setHorizontalScrollBarEnabled(false);
-    zoomControls = row();
-    zoomControls.setGravity(Gravity.CENTER);
-    zoomScroll.addView(zoomControls);
-    zoomRow.addView(zoomScroll, new LinearLayout.LayoutParams(0, dp(48), 1));
-    zoomLabel = text("1×", 13, Color.WHITE);
-    zoomLabel.setGravity(Gravity.CENTER);
-    zoomLabel.setContentDescription("Chỉnh zoom liên tục");
-    zoomLabel.setBackground(cameraRipple());
-    zoomLabel.setOnClickListener(v -> zoomDialog());
-    zoomRow.addView(zoomLabel, new LinearLayout.LayoutParams(dp(64), dp(48)));
-    zoomRow.setBackgroundColor(0x99000000);
-    stage.addView(zoomRow, new FrameLayout.LayoutParams(-1, dp(48), Gravity.BOTTOM));
+    zoomTabs =
+        new ZoomTabs(
+            this,
+            new ZoomTabs.Listener() {
+              public void zoom(float value) {
+                if (camera != null && (!busy || recordingVideo)) camera.setZoom(value);
+              }
+
+              public void details() {
+                zoomDialog();
+              }
+            });
+    zoomTabs.setBackgroundColor(0x99000000);
+    stage.addView(zoomTabs, new FrameLayout.LayoutParams(-1, dp(48), Gravity.BOTTOM));
 
     presetName =
         text(
             videoMode
-                ? "MP4 · 30 fps"
+                ? Presets.get(styleId).name + " · " + Math.round(strength * 100) + "% · MP4"
                 : Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%",
             12,
             Color.WHITE);
@@ -585,10 +616,10 @@ public final class MainActivity extends Activity {
         new RippleDrawable(
             ColorStateList.valueOf(0x44ffffff), round(0xb0000000, 16), round(Color.WHITE, 16)));
     presetName.setMinimumHeight(dp(48));
-    presetName.setContentDescription(videoMode ? "Video màu gốc" : "Cường độ style");
+    presetName.setContentDescription("Cường độ style");
     presetName.setOnClickListener(
         v -> {
-          if (!videoMode && !busy) showStrength();
+          if (!busy) showStrength();
         });
     FrameLayout.LayoutParams presetParams =
         new FrameLayout.LayoutParams(-2, dp(48), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
@@ -676,7 +707,20 @@ public final class MainActivity extends Activity {
               @Override
               public void ready() {
                 if (camera == null) return;
-                flash = camera.setFlash(flash);
+                cameraReport = camera.report();
+                camera.setPhotoFlash(flashMode);
+                flash = camera.hasFlash() && flashMode != 0;
+                if (videoMode) {
+                  torch = camera.setTorch(torch);
+                  View lamp = body.findViewWithTag("camera-ratio");
+                  if (lamp instanceof LinearLayout) {
+                    String label = torch ? "Đèn bật" : "Đèn tắt";
+                    ((TextView) ((LinearLayout) lamp).getChildAt(1)).setText(label);
+                    lamp.setContentDescription(label);
+                    lamp.setEnabled(camera.hasFlash());
+                    lamp.setAlpha(camera.hasFlash() ? 1f : .45f);
+                  }
+                }
                 updateCameraActions();
                 camera.setExposure(prefs.getInt("exposure", 0));
                 if (status != null) status.setVisibility(View.GONE);
@@ -772,7 +816,6 @@ public final class MainActivity extends Activity {
         new String[] {
           "camera-mic",
           "camera-exposure",
-          "camera-ratio",
           "camera-settings",
           "camera-album",
           "camera-flip",
@@ -831,30 +874,7 @@ public final class MainActivity extends Activity {
   }
 
   private void updateZoom(float zoom, float min, float max) {
-    if (zoomControls == null || zoomLabel == null) return;
-    zoomLabel.setText(zoomText(zoom));
-    String range = min + ":" + max;
-    if (!range.equals(zoomControls.getTag())) {
-      zoomControls.setTag(range);
-      zoomControls.removeAllViews();
-      for (float value : ZoomMath.stops(min, max)) {
-        Button button =
-            cameraText(
-                zoomText(value),
-                () -> {
-                  if (camera != null) camera.setZoom(value);
-                });
-        button.setTag(value);
-        button.setContentDescription("Zoom " + zoomText(value));
-        zoomControls.addView(button, new LinearLayout.LayoutParams(dp(52), dp(48)));
-      }
-    }
-    for (int i = 0; i < zoomControls.getChildCount(); i++) {
-      Button b = (Button) zoomControls.getChildAt(i);
-      boolean selected = Math.abs(((Float) b.getTag()) - zoom) < .05f;
-      b.setTextColor(selected ? 0xffffd45c : Color.WHITE);
-      b.setSelected(selected);
-    }
+    if (zoomTabs != null) zoomTabs.update(zoom, min, max);
   }
 
   private void zoomDialog() {
@@ -966,7 +986,9 @@ public final class MainActivity extends Activity {
       boolean active = icon.equals("flash") ? flash : icon.equals("timer") ? timer > 0 : grid;
       String label =
           icon.equals("flash")
-              ? (flash ? "Flash bật" : "Flash tắt")
+              ? (flash
+                  ? (flashMode == 1 ? "Flash auto" : flashMode == 3 ? "Đèn hỗ trợ" : "Flash bật")
+                  : "Flash tắt")
               : icon.equals("timer")
                   ? (timer == 0 ? "Hẹn giờ" : timer + " giây")
                   : (grid ? "Lưới bật" : "Lưới tắt");
@@ -981,7 +1003,7 @@ public final class MainActivity extends Activity {
           .setText(
               icon.equals("timer")
                   ? (timer > 0 ? timer + " giây" : "Hẹn giờ")
-                  : icon.equals("flash") ? (flash ? "Flash bật" : "Flash") : "Lưới");
+                  : icon.equals("flash") ? label : "Lưới");
       ((TextView) item.getChildAt(1)).setTextColor(active ? 0xffffd45c : Color.WHITE);
       if (videoMode && !icon.equals("grid")) {
         item.setEnabled(false);
@@ -1036,11 +1058,36 @@ public final class MainActivity extends Activity {
   }
 
   private void showStrength() {
-    if (busy || videoMode) return;
+    if (busy) return;
     LinearLayout panel = new LinearLayout(this);
     panel.setOrientation(LinearLayout.VERTICAL);
     panel.setPadding(dp(20), dp(8), dp(20), dp(12));
     panel.addView(strengthControl());
+    panel.addView(
+        button(
+            "Lưu màu và cường độ yêu thích",
+            () -> {
+              prefs
+                  .edit()
+                  .putInt("recipe-style", styleId)
+                  .putFloat("recipe-strength", strength)
+                  .apply();
+              message("Đã lưu công thức màu.");
+            },
+            false));
+    if (prefs.contains("recipe-style"))
+      panel.addView(
+          button(
+              "Dùng công thức đã lưu",
+              () -> {
+                styleId = prefs.getInt("recipe-style", 0);
+                strength = prefs.getFloat("recipe-strength", 1);
+                remember();
+                if (controlsDialog != null) controlsDialog.dismiss();
+                applyLive();
+                showStrength();
+              },
+              false));
     toggle(
         panel,
         "So sánh màu gốc",
@@ -1121,12 +1168,11 @@ public final class MainActivity extends Activity {
     if (presetName != null)
       presetName.setText(
           videoMode
-              ? "MP4 · 30 fps"
+              ? Presets.get(styleId).name + " · " + Math.round(strength * 100) + "% · MP4"
               : comparing
                   ? "Đang so sánh · Màu gốc"
                   : Presets.get(styleId).name + " · " + Math.round(strength * 100) + "%");
-    if (camera != null)
-      camera.color(Presets.get(videoMode ? 0 : styleId), videoMode || comparing ? 0 : strength);
+    if (camera != null) camera.color(Presets.get(styleId), comparing ? 0 : strength);
     if (editor && editSource != null) {
       ImageView image = body.findViewWithTag("editorImage");
       if (image != null)
@@ -1171,12 +1217,13 @@ public final class MainActivity extends Activity {
     long time;
     double lat = Double.NaN, lon = Double.NaN;
     float accuracy;
-    String place, source;
+    String place, source, trio;
   }
 
   private CaptureSettings snapshot(String source) {
     CaptureSettings s = new CaptureSettings();
     s.style = styleId;
+    s.trio = trioIds();
     s.strength = strength;
     s.ratio = "import".equals(source) ? 0 : RATIOS[ratioId];
     s.original = keepOriginal;
@@ -1233,6 +1280,8 @@ public final class MainActivity extends Activity {
                     mirror,
                     s.ratio,
                     s.strength);
+
+            prefs.edit().putString("trio-" + saved.id, s.trio).apply();
             progress(100);
             main.post(
                 () -> {
@@ -1863,6 +1912,20 @@ public final class MainActivity extends Activity {
               });
         });
     title(page, photo.style, date(photo.time, "dd MMMM yyyy · HH:mm"));
+    page.addView(button("Chia sẻ", () -> sharing(photo), true));
+    if (photo.hasOriginal) page.addView(button("Một ảnh, ba sắc", () -> trio(photo), false));
+    page.addView(
+        button(
+            "Chụp tiếp cùng khung",
+            () -> {
+              guidePhoto = photo;
+              detail = null;
+              tab = 0;
+              videoMode = false;
+              render();
+            },
+            false));
+    showLinkActions(page, photo);
     RatingBar rating = new RatingBar(this, null, android.R.attr.ratingBarStyle);
     rating.setNumStars(5);
     rating.setStepSize(1);
@@ -1944,6 +2007,419 @@ public final class MainActivity extends Activity {
             false));
   }
 
+  private void addGuide() {
+    PhotoStore.Photo guide = guidePhoto;
+    ImageView overlay = new ImageView(this);
+    overlay.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    overlay.setAlpha(guideOpacity);
+    viewfinder.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+    long token = uiGeneration;
+    worker.execute(
+        () -> {
+          Bitmap bitmap = PhotoStore.thumbnail(guide.image, 720);
+          main.post(
+              () -> {
+                if (token == uiGeneration && !destroyed) overlay.setImageBitmap(bitmap);
+                else if (bitmap != null) bitmap.recycle();
+              });
+        });
+    Button adjust =
+        cameraText(
+            "Ảnh căn khung",
+            () -> {
+              SeekBar slider = new SeekBar(this);
+              slider.setMax(100);
+              slider.setProgress(Math.round(guideOpacity * 100));
+              slider.setOnSeekBarChangeListener(
+                  new SeekBar.OnSeekBarChangeListener() {
+                    public void onProgressChanged(SeekBar b, int n, boolean user) {
+                      guideOpacity = n / 100f;
+                      overlay.setAlpha(guideOpacity);
+                    }
+
+                    public void onStartTrackingTouch(SeekBar b) {}
+
+                    public void onStopTrackingTouch(SeekBar b) {}
+                  });
+              showAlert(
+                  new AlertDialog.Builder(this)
+                      .setTitle("Độ mờ ảnh căn khung")
+                      .setView(slider)
+                      .setNegativeButton(
+                          "Bỏ ảnh căn",
+                          (d, w) -> {
+                            guidePhoto = null;
+                            render();
+                          })
+                      .setPositiveButton("Xong", null));
+            });
+    FrameLayout.LayoutParams guideParams =
+        new FrameLayout.LayoutParams(-2, dp(48), Gravity.TOP | Gravity.END);
+    guideParams.topMargin = dp(60);
+    adjust.setBackground(round(0xb0000000, 12));
+    viewfinder.addView(adjust, guideParams);
+  }
+
+  private String trioIds() {
+    return prefs.getInt("trio0", 0)
+        + ","
+        + prefs.getInt("trio1", 6)
+        + ","
+        + prefs.getInt("trio2", 18);
+  }
+
+  private int[] photoTrio(PhotoStore.Photo photo) {
+    String[] ids = prefs.getString("trio-" + photo.id, trioIds()).split(",");
+    return new int[] {Integer.parseInt(ids[0]), Integer.parseInt(ids[1]), Integer.parseInt(ids[2])};
+  }
+
+  private void chooseTrio() {
+    String[] names = new String[3];
+    for (int i = 0; i < 3; i++)
+      names[i] = (i + 1) + ". " + Presets.get(prefs.getInt("trio" + i, DEFAULT_TRIO[i])).name;
+    showAlert(
+        new AlertDialog.Builder(this)
+            .setTitle("Ba sắc cho lần chụp tới")
+            .setItems(
+                names,
+                (d, slot) -> {
+                  String[] styles = new String[Presets.ALL.size()];
+                  for (int i = 0; i < styles.length; i++) styles[i] = Presets.get(i).name;
+                  showAlert(
+                      new AlertDialog.Builder(this)
+                          .setTitle("Màu " + (slot + 1))
+                          .setItems(
+                              styles,
+                              (dialog, index) -> {
+                                for (int i = 0; i < 3; i++)
+                                  if (i != slot
+                                      && prefs.getInt("trio" + i, DEFAULT_TRIO[i]) == index) {
+                                    message("Màu đã nằm trong bộ ba.");
+                                    return;
+                                  }
+                                prefs.edit().putInt("trio" + slot, index).apply();
+                                chooseTrio();
+                              }));
+                })
+            .setPositiveButton("Xong", null));
+  }
+
+  private Bitmap original(PhotoStore.Photo photo, int edge) throws IOException {
+    return ImageDecoder.decodeBitmap(
+        ImageDecoder.createSource(photo.original),
+        (d, info, src) -> {
+          int w = info.getSize().getWidth(), h = info.getSize().getHeight();
+          float scale = Math.min(1, edge / (float) Math.max(w, h));
+          d.setTargetSize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
+          d.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+        });
+  }
+
+  private Bitmap variant(PhotoStore.Photo photo, Bitmap input, int id) {
+    return PhotoProcessor.render(
+        input, Presets.get(id), photo.strength, photo.cropRatio, photo.mirrored, "");
+  }
+
+  private void trio(PhotoStore.Photo photo) {
+    int[] ids = photoTrio(photo);
+    long token = uiGeneration;
+    worker.execute(
+        () -> {
+          Bitmap input = null;
+          try {
+            input = original(photo, 900);
+            Bitmap[] previews = new Bitmap[3];
+            for (int i = 0; i < 3; i++) previews[i] = variant(photo, input, ids[i]);
+            main.post(
+                () -> {
+                  if (token != uiGeneration || destroyed) {
+                    for (Bitmap b : previews) b.recycle();
+                    return;
+                  }
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  ImageView image = new ImageView(this);
+                  image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                  layout.addView(image, new LinearLayout.LayoutParams(-1, dp(260)));
+                  int[] index = {0};
+                  Button next = button("", () -> {}, false);
+                  layout.addView(next);
+                  Runnable refresh =
+                      () -> {
+                        image.setImageBitmap(previews[index[0]]);
+                        next.setText(
+                            (index[0] + 1) + "/3 · " + Presets.get(ids[index[0]]).name + "  ›");
+                      };
+                  next.setOnClickListener(
+                      v -> {
+                        index[0] = (index[0] + 1) % 3;
+                        refresh.run();
+                      });
+                  image.setOnTouchListener(
+                      new View.OnTouchListener() {
+                        float down;
+
+                        public boolean onTouch(View v, MotionEvent e) {
+                          if (e.getAction() == 0) down = e.getX();
+                          if (e.getAction() == 1 && Math.abs(e.getX() - down) > dp(24)) {
+                            index[0] = (index[0] + (e.getX() < down ? 1 : 2)) % 3;
+                            refresh.run();
+                          } else if (e.getAction() == 1) v.performClick();
+                          return true;
+                        }
+                      });
+                  refresh.run();
+                  AlertDialog dialog =
+                      new AlertDialog.Builder(this)
+                          .setTitle("Một ảnh, ba sắc")
+                          .setView(layout)
+                          .setNegativeButton("Đóng", null)
+                          .setPositiveButton(
+                              "Lưu bản màu", (d, w) -> saveVariant(photo, ids[index[0]]))
+                          .create();
+                  dialog.setOnDismissListener(
+                      d -> {
+                        image.setImageDrawable(null);
+                        for (Bitmap b : previews) b.recycle();
+                      });
+                  dialog.show();
+                });
+          } catch (Exception | OutOfMemoryError e) {
+            main.post(() -> message("Không đọc được ảnh gốc."));
+          } finally {
+            if (input != null) input.recycle();
+          }
+        });
+  }
+
+  private void saveVariant(PhotoStore.Photo photo, int id) {
+    long token = uiGeneration;
+    worker.execute(
+        () -> {
+          Bitmap input = null, result = null;
+          try {
+            input = original(photo, PhotoProcessor.MAX_EDGE);
+            result = variant(photo, input, id);
+            PhotoStore.Photo copy =
+                store.save(
+                    result,
+                    null,
+                    Presets.get(id),
+                    photo.time,
+                    photo.place,
+                    photo.source,
+                    photo.lat,
+                    photo.lon,
+                    photo.accuracy,
+                    photo.mirrored,
+                    photo.cropRatio,
+                    photo.strength);
+            main.post(
+                () -> {
+                  if (!destroyed && token == uiGeneration) {
+                    detail = copy;
+                    render();
+                  }
+                });
+          } catch (Exception | OutOfMemoryError e) {
+            main.post(() -> message("Không lưu được bản màu."));
+          } finally {
+            if (input != null) input.recycle();
+            if (result != null) result.recycle();
+          }
+        });
+  }
+
+  private void sharing(PhotoStore.Photo photo) {
+    String[] choices =
+        photo.hasOriginal
+            ? new String[] {"Gửi ảnh qua ứng dụng", "Tạo liên kết ảnh", "Gửi bạn chọn màu"}
+            : new String[] {"Gửi ảnh qua ứng dụng", "Tạo liên kết ảnh"};
+    showAlert(
+        new AlertDialog.Builder(this)
+            .setTitle("Chia sẻ ảnh")
+            .setItems(
+                choices,
+                (d, n) -> {
+                  if (n == 0) {
+                    Uri uri = SharedPhotoProvider.uri(photo.image);
+                    Intent send =
+                        new Intent(Intent.ACTION_SEND)
+                            .setType("image/jpeg")
+                            .putExtra(Intent.EXTRA_STREAM, uri);
+                    send.setClipData(ClipData.newRawUri("Ảnh Ed-Cam", uri));
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    try {
+                      startActivity(Intent.createChooser(send, "Gửi ảnh"));
+                    } catch (ActivityNotFoundException e) {
+                      message("Chưa có ứng dụng nhận ảnh.");
+                    }
+                    return;
+                  }
+                  if (prefs.getString("share-origin", "").isEmpty()) {
+                    shareSettings();
+                    return;
+                  }
+                  if (prefs.contains("link-" + photo.id)) {
+                    message("Thu hồi liên kết hiện tại trước khi tạo liên kết khác.");
+                    return;
+                  }
+                  showAlert(
+                      new AlertDialog.Builder(this)
+                          .setTitle(choices[n])
+                          .setMessage(
+                              "Ảnh sẽ được tải lên máy chủ đã chọn. Ai có link đều xem được trong 7"
+                                  + " ngày hoặc đến khi bạn thu hồi.")
+                          .setNegativeButton("Hủy", null)
+                          .setPositiveButton("Tạo liên kết", (dlg, w) -> upload(photo, n == 2)));
+                }));
+  }
+
+  private void shareSettings() {
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    box.setPadding(dp(20), 0, dp(20), 0);
+    EditText host = new EditText(this), key = new EditText(this);
+    host.setSingleLine();
+    host.setHint("https://ten-mien-cua-ban");
+    host.setText(prefs.getString("share-origin", ""));
+    key.setSingleLine();
+    key.setInputType(129);
+    key.setHint("Khóa tải ảnh");
+    key.setText(prefs.getString("share-key", ""));
+    box.addView(host);
+    box.addView(key);
+    showAlert(
+        new AlertDialog.Builder(this)
+            .setTitle("Máy chủ chia sẻ Ed-Cam")
+            .setView(box)
+            .setNegativeButton("Hủy", null)
+            .setPositiveButton(
+                "Lưu",
+                (d, w) -> {
+                  try {
+                    String base = PhotoLinks.origin(host.getText().toString());
+                    if (key.length() == 0) throw new IOException("Thiếu khóa tải ảnh.");
+                    prefs
+                        .edit()
+                        .putString("share-origin", base)
+                        .putString("share-key", key.getText().toString())
+                        .apply();
+                    message("Đã lưu máy chủ.");
+                  } catch (IOException e) {
+                    message(e.getMessage());
+                  }
+                }));
+  }
+
+  private final Set<String> uploads = new HashSet<>();
+
+  private void upload(PhotoStore.Photo photo, boolean poll) {
+    if (!uploads.add(photo.id)) return;
+    message("Đang tạo liên kết…");
+    network.execute(
+        () -> {
+          Bitmap input = null;
+          try {
+            JSONArray images = new JSONArray();
+            if (poll) {
+              input = original(photo, 1200);
+              for (int id : photoTrio(photo)) {
+                Bitmap b = variant(photo, input, id);
+                try {
+                  ByteArrayOutputStream out = new ByteArrayOutputStream();
+                  b.compress(Bitmap.CompressFormat.JPEG, 90, out);
+                  images.put(PhotoLinks.image(Presets.get(id).name, out.toByteArray()));
+                } finally {
+                  b.recycle();
+                }
+              }
+            } else
+              images.put(PhotoLinks.image(photo.style, Files.readAllBytes(photo.image.toPath())));
+            JSONObject link = PhotoLinks.create(prefs, images);
+            prefs.edit().putString("link-" + photo.id, link.toString()).commit();
+            main.post(
+                () -> {
+                  if (!destroyed && detail == photo) {
+                    render();
+                    if (resumed) sendLink(link.optString("url"));
+                  }
+                });
+          } catch (Exception | OutOfMemoryError e) {
+            main.post(() -> message("Chưa tạo được link. " + e.getMessage()));
+          } finally {
+            if (input != null) input.recycle();
+            main.post(() -> uploads.remove(photo.id));
+          }
+        });
+  }
+
+  private void sendLink(String url) {
+    startActivity(
+        Intent.createChooser(
+            new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, url),
+            "Gửi liên kết"));
+  }
+
+  private void showLinkActions(LinearLayout page, PhotoStore.Photo photo) {
+    String raw = prefs.getString("link-" + photo.id, null);
+    if (raw == null) return;
+    try {
+      JSONObject link = new JSONObject(raw);
+      String url = link.getString("url"), owner = link.getString("owner");
+      page.addView(button("Gửi liên kết", () -> sendLink(url), false));
+      page.addView(
+          button(
+              "Sao chép link",
+              () -> {
+                ((android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE))
+                    .setPrimaryClip(ClipData.newPlainText("Ed-Cam", url));
+                message("Đã sao chép link.");
+              },
+              false));
+      TextView votes = text("Đang đọc lựa chọn…", 14, palette.muted);
+      page.addView(votes);
+      network.execute(
+          () -> {
+            try {
+              JSONArray rows =
+                  PhotoLinks.request(url + "/votes", "GET", owner, null).getJSONArray("results");
+              StringBuilder out = new StringBuilder();
+              for (int i = 0; i < rows.length(); i++) {
+                JSONArray r = rows.getJSONArray(i);
+                out.append(r.getString(0)).append(" · ").append(r.getInt(1)).append(" lượt   ");
+              }
+              main.post(() -> votes.setText(out));
+            } catch (Exception e) {
+              main.post(() -> votes.setText("Chưa đọc được kết quả."));
+            }
+          });
+      page.addView(
+          button(
+              "Thu hồi liên kết",
+              () ->
+                  network.execute(
+                      () -> {
+                        try {
+                          try {
+                            PhotoLinks.request(url, "DELETE", owner, null);
+                          } catch (FileNotFoundException expired) {
+                          }
+                          prefs.edit().remove("link-" + photo.id).apply();
+                          main.post(
+                              () -> {
+                                if (!destroyed && detail == photo) render();
+                              });
+                        } catch (Exception e) {
+                          main.post(() -> message("Chưa thu hồi được liên kết."));
+                        }
+                      }),
+              false));
+    } catch (JSONException e) {
+      message("Thông tin liên kết không hợp lệ.");
+    }
+  }
+
   private void exportPhoto(PhotoStore.Photo photo, boolean original) {
     if (busy) return;
     busy = true;
@@ -1952,6 +2428,7 @@ public final class MainActivity extends Activity {
         () -> {
           try {
             store.export(photo, original);
+
             progress(100);
             main.post(
                 () -> {
@@ -1969,11 +2446,16 @@ public final class MainActivity extends Activity {
   }
 
   private void deletePhoto(PhotoStore.Photo photo) {
+    if (uploads.contains(photo.id) || prefs.contains("link-" + photo.id)) {
+      message("Hãy thu hồi liên kết trước khi xóa ảnh.");
+      return;
+    }
     busy = true;
     worker.execute(
         () -> {
           try {
             store.delete(photo);
+            prefs.edit().remove("trio-" + photo.id).apply();
             thumbnails.remove(photo.image.getPath());
             main.post(
                 () -> {
@@ -2166,6 +2648,25 @@ public final class MainActivity extends Activity {
     theme.setContentDescription("Chọn giao diện");
     theme.setBackground(ripple(palette.surface, 12));
     page.addView(theme, new LinearLayout.LayoutParams(-1, -2));
+    page.addView(button("Ba sắc yêu thích", () -> chooseTrio(), false));
+    page.addView(button("Máy chủ chia sẻ", () -> shareSettings(), false));
+    page.addView(
+        button(
+            "Thông tin camera",
+            () ->
+                showAlert(
+                    new AlertDialog.Builder(this)
+                        .setTitle("Camera trên máy")
+                        .setMessage(
+                            android.os.Build.MANUFACTURER
+                                + " "
+                                + android.os.Build.MODEL
+                                + " · Android "
+                                + android.os.Build.VERSION.RELEASE
+                                + "\n"
+                                + cameraReport)
+                        .setPositiveButton("Đóng", null)),
+            false));
     section(page, "Khung ngắm");
     toggle(
         page,
@@ -2189,7 +2690,7 @@ public final class MainActivity extends Activity {
     paragraph(
         page,
         "Video MP4/H.264, tối đa Full HD 30 fps theo camera. Video được giữ trong album riêng; có"
-            + " thể xem, xuất hoặc xóa. Video dùng màu gốc, không áp preset ảnh.");
+            + " thể xem, xuất hoặc xóa. Video dùng cùng tông màu và cường độ với ảnh.");
     section(page, "Khi lưu ảnh");
     toggle(
         page,
@@ -2251,8 +2752,8 @@ public final class MainActivity extends Activity {
     section(page, "Riêng tư từ đầu");
     paragraph(
         page,
-        "Không tài khoản. Không quảng cáo. Không gửi ảnh lên máy chủ. Ed-Cam không yêu cầu quyền"
-            + " Internet.");
+        "Ảnh và video được lưu trong máy. Khi bạn chọn tạo liên kết, Ed-Cam tải ảnh đã chọn lên máy"
+            + " chủ HTTPS đã cấu hình. Bạn có thể thu hồi liên kết trong album.");
     paragraph(
         page,
         "Ảnh và video trong album sẽ mất khi gỡ ứng dụng hoặc xóa dữ liệu app. Dùng nút lưu vào thư"
@@ -2260,7 +2761,7 @@ public final class MainActivity extends Activity {
     section(page, "Về Ed-Cam");
     paragraph(
         page,
-        "Phiên bản 1.3.0 · 180 preset màu · 5 giao diện\n"
+        "Phiên bản 1.4.0 · 180 preset màu · 5 giao diện\n"
             + "Ảnh đầu ra tối đa 2560 px ở cạnh dài. Màu hiển thị trực tiếp; hạt film và tối góc"
             + " được thêm khi lưu. Chất ảnh phụ thuộc camera và ánh sáng.");
   }

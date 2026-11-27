@@ -298,6 +298,9 @@ public final class UpgradeInstrumentation extends Instrumentation {
         () -> {
           set("tab", 0);
           set("videoMode", true);
+          for (Presets.Style style : Presets.ALL)
+            if (style.name.equals("Mono")) set("styleId", style.id);
+          set("strength", 1f);
           set("videoAudio", true);
           invoke("render");
         });
@@ -332,7 +335,22 @@ public final class UpgradeInstrumentation extends Instrumentation {
           "real recording duration");
       Bitmap frame = retriever.getFrameAtTime();
       check(frame != null, "video decodes actual frame");
-      if (frame != null) frame.recycle();
+      if (frame != null) {
+        int brightest = 0, darkest = 255, chroma = 0, samples = 0;
+        for (int y = 0; y < frame.getHeight(); y += 16)
+          for (int x = 0; x < frame.getWidth(); x += 16) {
+            int c = frame.getPixel(x, y);
+            int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
+            darkest = Math.min(darkest, r);
+            brightest = Math.max(brightest, r);
+            chroma += Math.abs(r - g) + Math.abs(g - b);
+            samples++;
+          }
+        check(
+            brightest - darkest > 20 && chroma / (float) samples < 10,
+            "encoded Mono frame has detail and neutral color");
+        frame.recycle();
+      }
     }
     android.net.Uri exported = videos.export(clip);
     check(exported != null, "MediaStore video export");

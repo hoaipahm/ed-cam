@@ -1,5 +1,12 @@
 ﻿# Changelog
 
+## 1.4.0
+
+- Centered swipe zoom tabs, fine zoom ruler, four photo lighting choices, video torch and camera capability details.
+- Reusable color recipes, three-look previews and framing from an earlier photo.
+- GPU color matrix during MP4 encoding and the same intensity in the viewfinder.
+- Native JPEG sharing and optional self-hosted HTTPS links with color votes and revocation.
+
 ## 1.3.0
 
 - Replaced WebView control replicas with native buttons, switches, sliders, dialogs and ripple feedback. Original effect assets remain unchanged in source.

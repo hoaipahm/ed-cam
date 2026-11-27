@@ -6,7 +6,7 @@ Mode: Operate. The user's screen recording rejects the earlier illustrated WebVi
 
 The stage fits the selected photo ratio or portrait 9:16 video ratio without distortion. A 56dp toolbar overlays its top. Five equal-width tools use 23dp line icons, 11sp captions and at least 48dp touch targets. Photo tools are flash, timer, ratio, styles and settings. Video tools are microphone, exposure/zoom, 16:9 format, grid and settings.
 
-Hardware zoom stops occupy a horizontally scrollable 48dp strip. The trailing zoom value opens native zoom and exposure sliders. Pinch gestures update the Camera2 request. One 48dp preset/intensity overlay sits above zoom; photo mode opens the native intensity/compare dialog. Video explicitly uses original camera colors.
+The 48dp zoom control keeps the selected tab on the shutter axis. Swipe to step, hold and drag for the fine ruler, and tap the center for zoom and exposure sliders. Pinch gestures update the same Camera2 request. The preset overlay opens the color intensity and saved recipe controls. MP4 recording applies the selected RGB matrix on a GPU encoder surface.
 
 The 88dp capture row places equally weighted Album and Flip targets around an 80dp shutter. Its ring, core and pressed state are drawn natively. Video uses a red core and square stop state. The 48dp Photo/Video row becomes an elapsed timer and Pause/Resume row during recording. Unsafe controls are visibly disabled. Hardware volume keys operate the shutter on this screen.
 
