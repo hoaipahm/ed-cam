@@ -1033,7 +1033,6 @@ public final class MainActivity extends Activity {
   }
 
   private void processPhoto(byte[] bytes, boolean mirror, CaptureSettings s) {
-    message("Đang tạo ảnh và lưu vào album…");
     progress(0);
     worker.execute(
         () -> {
@@ -1071,14 +1070,15 @@ public final class MainActivity extends Activity {
                   if (destroyed) return;
                   busy = false;
                   pending = null;
-                  if (editor) {
+                  boolean savedEdit = editor;
+                  if (savedEdit) {
                     clearEditor();
                     detail = saved;
                     tab = 2;
                     render();
                   }
                   if (sakuga != null) sakuga.success("Chụp ảnh ngay");
-                  message("Đã lưu ảnh vào album Ed-Cam.");
+                  if (savedEdit) message("Đã lưu ảnh vào album Ed-Cam.");
                 });
           } catch (Exception | OutOfMemoryError e) {
             progress(-1);
