@@ -1,8 +1,23 @@
-# Ed-Cam
+<p align="center">
+  <img src="docs/images/ed-cam-icon.svg" alt="Ed-Cam camera icon" width="112" height="112">
+</p>
 
-Ed-Cam is an offline Android camera and photo editor for Android 10 and later. It offers live color presets, a private on-device album, and animated controls from the Sakuga VFX gallery.
+<h1 align="center">Ed-Cam</h1>
 
-**Latest build:** [Download Ed-Cam 1.2.2](delivery/Ed-Cam-1.2.2.apk)
+<p align="center">An offline Android camera and photo editor with live color presets and a private album.</p>
+
+<p align="center">
+  <img src="docs/images/java.svg" alt="Java 17">
+  <img src="docs/images/android.svg" alt="Android 10+">
+  <img src="docs/images/camera.svg" alt="Camera2">
+  <img src="docs/images/ui-effects.svg" alt="Sakuga VFX">
+</p>
+
+<p align="center">
+  <a href="delivery/Ed-Cam-1.2.2.apk">Download APK 1.2.2</a> ?
+  <a href="#technology">Technology</a> ?
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
 ## Screenshot
 
@@ -31,6 +46,17 @@ See [APK checksums](delivery/SHA256SUMS.txt) and the [changelog](CHANGELOG.md).
 - Use front and rear cameras, tap to focus, set a timer, and choose a capture aspect ratio. Flash depends on the selected camera's hardware.
 - Import and edit images, keep originals, rate photos privately, and export to `Pictures/Ed-Cam`.
 - Choose among five interface themes and optionally add a date stamp or capture location. The app works without an account or internet access.
+
+## Technology
+
+| Layer | Technology | Role |
+| --- | --- | --- |
+| Android app | Java 17 and Android Views | Screens, camera controls, and photo editing workflow |
+| Camera | Android Camera2 | Live viewfinder, capture, focus, and hardware flash requests |
+| Image processing | Android Bitmap, Canvas, and ColorMatrix | Preset previews and on-device photo rendering |
+| Effects | Sakuga VFX in a local Android WebView | Animated controls that relay actions to the Android app |
+| Storage | Local app files and Android MediaStore | Private album storage and export to the device gallery |
+| Build and verification | Gradle, Android lint, and instrumentation | Builds APKs and checks Android behavior |
 
 ## Build from source
 
