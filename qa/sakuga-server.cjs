@@ -2,7 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '../app/src/main/assets');
-const allowed = new Set(['sakuga.html', 'tabs.js', 'sakuga-host.js', 'sakuga-host.css']);
+const allowed = new Set(['sakuga.html', 'tabs.js', 'sakuga-host.js', 'sakuga-host.css', 'button.js', 'toggle.js', 'slider.js', 'checkbox.js', 'radio.js', 'input.js', 'progress.js', 'rating.js', 'toast.js', 'tooltip.js']);
 http.createServer((request, response) => {
   const name = new URL(request.url, 'http://127.0.0.1').pathname.slice(1) || 'sakuga.html';
   if (!allowed.has(name)) { response.writeHead(404); response.end(); return; }
