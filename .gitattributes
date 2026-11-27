@@ -1,0 +1,2 @@
+# Preserve the upstream component bytes and reproducible hashes on Windows checkouts.
+app/src/main/assets/* text eol=lf
