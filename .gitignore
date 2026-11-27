@@ -14,4 +14,6 @@ delivery/*.png
 qa/*.log
 qa/*threads.txt
 qa/*.json
+qa/video-review/
+__pycache__/
 qa/apk-signature.txt
