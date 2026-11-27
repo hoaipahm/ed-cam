@@ -198,3 +198,14 @@ Permission and failure explanations are centered inside the viewfinder and can b
 - Don't replace photo content with decorative theme illustrations.
 - Don't claim a visual match to Moc: no corresponding source or reference was found.
 - Don't claim hardware validation from source inspection or emulator review.
+
+
+## Ed-Cam 1.2.0 control update (2026-11-27)
+
+The user pinned the Sakuga gallery as the visual and motion authority. Native camera geometry, photo processing, album storage and five palette choices remain. Local unmodified standalone scripts now supply all eleven gallery component types. Primary shooting/save/import actions keep the original primary impact; quieter actions and category filters use secondary buttons. Do not override a primary button's impact-frame background with selection styling.
+
+The single Activity overlay positions components over native anchors, clipping only partially visible controls inside scrollers. Native controls remain attached for business logic and failure fallback, and are hidden from accessibility when web counterparts take over. Swipes starting on web controls scroll their native ScrollView/ListView/HorizontalScrollView; range drags stay with the slider. App-owned alerts and the intensity dialog use one additional temporary overlay, released on dismissal; OS permission sheets and Android's date/file pickers keep platform UI.
+
+Light controls use gallery ink #1D1A4A, white card, soft #B8B3FF, primary #8F8DF7 and accent #FF5FA8; Night keeps readable dark surfaces. The original drawn toggle is scaled to fit its native target without changing any painted frame. Native fontScale is passed into WebView text zoom. Tooltips are positioned inside the viewport. Toasts sit above the camera dock so they cannot cover tab buttons.
+
+The camera names the active preset and intensity. The MÀU dialog offers a temporary original-color comparison; it does not silently change saved strength. Photo details include a private 0–5 star marker. Real task phases (decode, color render, persistence) drive progress; success is reported only after persistence returns. No fake demo progress ships.
